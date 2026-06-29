@@ -1,8 +1,8 @@
 /**
  * @file positionStore.js
- * @description 做市商期权持仓矩阵存储与更新管理器。
+ * @description 期权持仓矩阵存储与更新管理器。
  * 负责管理各标的资产 (Ticker) 的期权持仓，并支持开盘利用 Benzinga 全期权链数据进行底仓初始化，
- * 以及盘中根据交易流水进行增量异步修正，避免高频读写冲突。
+ * 以及盘中根据交易流水修正模型持仓增量，避免高频读写冲突。
  */
 
 const { calculateBSGreeks, calculateImpliedVolatility } = require('../calculator/bsCalculator');
@@ -12,9 +12,8 @@ class PositionStore {
   constructor(config = {}) {
     // 内存持仓字典：{ [ticker]: { [optionSymbol]: optionContractObject } }
     this.store = {};
-    
-    // 默认配置
-    this.oiFactor = config.oiFactor !== undefined ? config.oiFactor : 0.5;
+
+    this.minRealtimeTMinutes = config.minRealtimeTMinutes !== undefined ? config.minRealtimeTMinutes : 5;
   }
 
   /**
@@ -75,7 +74,7 @@ class PositionStore {
   }
 
   /**
-   * 盘中收到大单交易时，增量更新做市商的持仓矩阵
+   * 盘中收到大单交易时，增量更新 flowPositionDelta。
    * @param {string} ticker - 标的资产代码
    * @param {object} trade - 交易数据对象 (格式同 2026-06-18.json 中的记录)
    * @returns {boolean} 是否更新成功
@@ -110,38 +109,22 @@ class PositionStore {
         strike: parseFloat(trade.strike_price),
         type: type,
         expiration: trade.date_expiration,
-        openInterest: oi,
-        // 根据解耦架构初始化持仓
-        structurePosition: type === 'CALL' ? (oi * this.oiFactor) : (-oi * this.oiFactor),
-        dealerPosition: -oi * this.oiFactor,
-        iv: undefined
+        openingOI: oi,
+        flowPositionDelta: 0,
+        ivRealtime: undefined,
+        ivGlobal: undefined
       };
     }
 
-    // 3. 计算本笔交易导致的持仓变动量 (PRD Step 2 & 3)
+    // 3. 计算本笔交易导致的模型持仓修正量。
     const size = parseInt(trade.size, 10) || 0;
     const direction = this._determineTradeDirection(trade);
     const contract = this.store[uppercaseTicker][symbol];
-    const isCall = contract.type === 'CALL';
 
     if (direction === 'BUY') {
-      // 客户买入，做市商卖出 => 做市商持仓减少
-      contract.dealerPosition -= size;
-      // 结构层：多头买入 CALL => 多头地形增加；多头买入 PUT => 空头地形增加 (即更加负)
-      if (isCall) {
-        contract.structurePosition += size;
-      } else {
-        contract.structurePosition -= size;
-      }
+      contract.flowPositionDelta += size;
     } else if (direction === 'SELL') {
-      // 客户卖出，做市商买入 => 做市商持仓增加
-      contract.dealerPosition += size;
-      // 结构层：多头卖出 CALL => 多头地形减少；多头卖出 PUT => 空头地形减少 (即更加正)
-      if (isCall) {
-        contract.structurePosition -= size;
-      } else {
-        contract.structurePosition += size;
-      }
+      contract.flowPositionDelta -= size;
     }
 
     return true;
@@ -198,11 +181,15 @@ class PositionStore {
 
       // 计算日内高频年化剩余期限 T (修复 0DTE T=0 的 Bug)
       // Bug #7: 使用共享工具类计算 T
-      const T = calculateT(currentDateStr, currentTimeStr, contract.expiration);
+      const minRealtimeT = this.minRealtimeTMinutes / (365 * 24 * 60);
+      const T = Math.max(
+        minRealtimeT,
+        calculateT(currentDateStr, currentTimeStr, contract.expiration)
+      );
 
       const marketPrice = contract.midpoint || ((contract.bid + contract.ask) / 2.0) || 0.1;
 
-      // 动态反推实时 IV：使用分钟/秒级 T，供实时 GEX 与 Dealer Pressure 使用
+      // 动态反推实时 IV：使用分钟级 T，供实时 GEX 使用
       let ivRealtime = contract.ivRealtime;
       if (ivRealtime === undefined || ivRealtime === null) {
         ivRealtime = calculateImpliedVolatility(spot, contract.strike, T, r, marketPrice, contract.type);
@@ -210,15 +197,18 @@ class PositionStore {
           ivRealtime = 0.20; // 实在算不出来的回退默认值为 20%，更贴近真实大盘 (SPY/QQQ) 的底噪 IV
         }
         contract.ivRealtime = ivRealtime;
-        contract.iv = ivRealtime; // 兼容旧字段
       }
 
       // 计算实时 Greeks
       const greeks = calculateBSGreeks(spot, contract.strike, T, r, ivRealtime, contract.type, greeksConfig);
 
-      // 结构层与做市商持仓解耦后，直接利用 structurePosition 进行 GEX 地图计算
-      // GEX = structurePosition * Gamma * 100 * Spot^2 * 0.01
-      const gex = contract.structurePosition * greeks.gamma * 100 * (spot * spot) * 0.01;
+      const openingOI = contract.openingOI || 0;
+      const flowPositionDelta = contract.flowPositionDelta || 0;
+      const realtimePosition = openingOI + flowPositionDelta;
+      const realtimeSignedPosition = this._toSignedPosition(realtimePosition, contract.type);
+      const globalSignedPosition = this._toSignedPosition(openingOI, contract.type);
+
+      const realtimeGex = realtimeSignedPosition * greeks.gamma * 100 * (spot * spot) * 0.01;
 
       // 全局地图 GEX：使用静态 OI（即开盘未平仓量）与天级 T/IV
       const T_global = calculateDayT(currentDateStr, contract.expiration);
@@ -231,11 +221,13 @@ class PositionStore {
         contract.ivGlobal = ivGlobal;
       }
       const greeks_global = calculateBSGreeks(spot, contract.strike, T_global, r, ivGlobal, contract.type, greeksConfig);
-      const initialPosition = contract.type === 'CALL' ? ((contract.openInterest || 0) * this.oiFactor) : (-(contract.openInterest || 0) * this.oiFactor);
-      const gexGlobal = initialPosition * greeks_global.gamma * 100 * (spot * spot) * 0.01;
+      const globalGex = globalSignedPosition * greeks_global.gamma * 100 * (spot * spot) * 0.01;
 
       return {
         ...contract,
+        openingOI,
+        flowPositionDelta,
+        realtimePosition,
         t: T,
         tGlobal: T_global,
         ivRealtime,
@@ -248,8 +240,8 @@ class PositionStore {
         gammaGlobal: greeks_global.gamma,
         charmGlobal: greeks_global.charm,
         vannaGlobal: greeks_global.vanna,
-        gex: gex, // 用于实时状态
-        gexGlobal: gexGlobal // 用于全局地图
+        realtimeGex,
+        globalGex
       };
     }).filter(item => item !== null);
   }
@@ -278,7 +270,6 @@ class PositionStore {
         iv = 0.20; // 实在算不出的回退默认值为 20%
       }
       contract.ivRealtime = iv;
-      contract.iv = iv;
 
       const T_global = calculateDayT(currentDateStr, contract.expiration);
       let ivGlobal = calculateImpliedVolatility(spot, contract.strike, T_global, r, marketPrice, contract.type);
@@ -315,14 +306,13 @@ class PositionStore {
       strike: parseFloat(opt.strike),
       type: type,
       expiration: expirationStr,
-      openInterest: oi,
-      // 结构层与做市商持仓解耦
-      structurePosition: type === 'CALL' ? (oi * this.oiFactor) : (-oi * this.oiFactor),
-      dealerPosition: -oi * this.oiFactor,
+      openingOI: oi,
+      flowPositionDelta: 0,
       bid: bid,
       ask: ask,
       midpoint: midpoint,
-      iv: undefined // 设为 undefined，便于后续通过初始化或反推填充
+      ivRealtime: undefined,
+      ivGlobal: undefined
     };
   }
 
@@ -341,6 +331,10 @@ class PositionStore {
    */
   _determineTradeDirection(trade) {
     return determineTradeDirection(trade.execution_estimate, trade.aggressor_ind);
+  }
+
+  _toSignedPosition(position, optionType) {
+    return optionType === 'PUT' ? -position : position;
   }
 
   /**
@@ -372,7 +366,6 @@ class PositionStore {
             contract.ask = ask;
             contract.midpoint = (bid + ask) / 2.0;
             // 报价变了，强制清除缓存的旧 IV，使后续计算重新反推
-            contract.iv = undefined;
             contract.ivRealtime = undefined;
             contract.ivGlobal = undefined;
           }

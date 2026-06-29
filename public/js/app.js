@@ -34,6 +34,17 @@ function formatCompactNumber(value) {
   return `${sign}${scaled.toFixed(decimals).replace(/\.?0+$/, '')}${unit.suffix}`;
 }
 
+function formatGex(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return '$0';
+  return `${num < 0 ? '-' : ''}$${formatCompactNumber(Math.abs(num))}`;
+}
+
+function formatWall(value) {
+  const num = Number(value);
+  return Number.isFinite(num) ? `$${num.toFixed(num >= 100 ? 0 : 2)}` : '--';
+}
+
 // ==========================================
 // 1. 初始化 Chart.js 垂直标注线插件
 // ==========================================
@@ -152,21 +163,19 @@ const simClock = document.getElementById('simClock');
 const timeProgressBar = document.getElementById('timeProgressBar');
 
 const spotVal = document.getElementById('spotVal');
-const vwapVal = document.getElementById('vwapVal');
-const priceDiffPercent = document.getElementById('priceDiffPercent');
+const gexChangeVal = document.getElementById('gexChangeVal');
 
-const influenceVal = document.getElementById('influenceVal');
-const regimeVal = document.getElementById('regimeVal');
+const globalGexVal = document.getElementById('globalGexVal');
 const influenceCard = document.getElementById('influenceCard');
 
-const dpiVal = document.getElementById('dpiVal');
-const dpiProgressBar = document.getElementById('dpiProgressBar');
+const realtimeGexVal = document.getElementById('realtimeGexVal');
 
-const notionalVal = document.getElementById('notionalVal');
-const notionalCard = document.getElementById('notionalCard');
+const wallsVal = document.getElementById('wallsVal');
+const zeroGammaVal = document.getElementById('zeroGammaVal');
+const wallsCard = document.getElementById('wallsCard');
 
 const statusBadge = document.getElementById('statusBadge');
-const reportContent = document.getElementById('reportContent');
+const modelNoteContent = document.getElementById('modelNoteContent');
 
 // ==========================================
 // 3. 页面载入初始化
@@ -327,63 +336,15 @@ function renderReplayFrame() {
   const pct = ((point.sec - 9.5 * 3600) / (6.5 * 3600)) * 100;
   timeProgressBar.style.width = `${Math.max(0, Math.min(100, pct))}%`;
 
-  // 2. 更新 Spot 和 VWAP
+  // 2. 更新核心 GEX 指标
   spotVal.textContent = `$${point.spot.toFixed(2)}`;
-  vwapVal.textContent = `$${point.vwap.toFixed(2)}`;
-
-  const diffPct = ((point.spot - point.vwap) / point.vwap) * 100;
-  priceDiffPercent.textContent = `${diffPct >= 0 ? '+' : ''}${diffPct.toFixed(2)}%`;
-  priceDiffPercent.className = diffPct >= 0 ? 'up-arrow' : 'down-arrow';
-
-  // 3. 更新最新报告和决策输出
-  if (point.report) {
-    const report = point.report;
-
-    // 做市商定价权
-    influenceVal.textContent = report.dealerInfluence.score;
-    regimeVal.textContent = report.dealerInfluence.regime;
-    if (report.dealerInfluence.score >= 80) {
-      influenceCard.className = 'glass-panel metric-card green';
-    } else if (report.dealerInfluence.score >= 50) {
-      influenceCard.className = 'glass-panel metric-card gold';
-    } else {
-      influenceCard.className = 'glass-panel metric-card rose';
-    }
-
-    // DPI 仪表盘
-    const dpi = report.pressureMetrics.dpi;
-    dpiVal.textContent = `${dpi >= 0 ? '+' : ''}${dpi.toFixed(2)}`;
-    const absDpi = Math.min(50, Math.abs(dpi));
-    if (dpi >= 0) {
-      dpiProgressBar.style.left = '50%';
-      dpiProgressBar.style.width = `${absDpi}%`;
-      dpiProgressBar.style.background = 'var(--accent-cyan)';
-      dpiProgressBar.style.boxShadow = '0 0 8px var(--accent-cyan)';
-    } else {
-      dpiProgressBar.style.left = `${50 - absDpi}%`;
-      dpiProgressBar.style.width = `${absDpi}%`;
-      dpiProgressBar.style.background = 'var(--accent-rose)';
-      dpiProgressBar.style.boxShadow = '0 0 8px var(--accent-rose)';
-    }
-
-    // 做市商被迫交易名义金额
-    const notionalUSD = report.pressureMetrics.dealerNotionalUSD;
-    notionalVal.textContent = report.pressureMetrics.dealerNotionalText;
-    notionalCard.className = notionalUSD >= 0 ? 'glass-panel metric-card cyan' : 'glass-panel metric-card rose';
-
-    // 价格验证状态
-    statusBadge.textContent = report.verification.status;
-    if (report.verification.status === 'EFFECTIVE') {
-      statusBadge.className = 'status-badge badge-effective';
-    } else if (report.verification.status === 'INEFFECTIVE') {
-      statusBadge.className = 'status-badge badge-ineffective';
-    } else {
-      statusBadge.className = 'status-badge badge-neutral';
-    }
-
-    // 报告内容展示
-    reportContent.textContent = report.conclusion;
-  }
+  gexChangeVal.textContent = formatGex(point.gexChange);
+  globalGexVal.textContent = formatGex(point.globalTotalGex);
+  realtimeGexVal.textContent = formatGex(point.realtimeTotalGex);
+  wallsVal.textContent = `${formatWall(point.realtimePutWall)} / ${formatWall(point.realtimeCallWall)}`;
+  zeroGammaVal.textContent = `Zero Gamma: ${formatWall(point.realtimeZeroGamma)}`;
+  influenceCard.className = point.globalTotalGex >= 0 ? 'glass-panel metric-card green' : 'glass-panel metric-card rose';
+  wallsCard.className = point.realtimeTotalGex >= 0 ? 'glass-panel metric-card cyan' : 'glass-panel metric-card rose';
 
   // 4. 更新 GEX 柱状图
   const expiry = document.getElementById('expiryFilter').value;
@@ -391,29 +352,33 @@ function renderReplayFrame() {
   updateGexChartTitle(tickerSelect.value, expiry, point.date, point.time);
 
   if (gexData && gexChart) {
-    const smoothData = smoothGexData(gexData.strikes, gexData.gex, gexData.gexGlobal || []);
+    const smoothData = smoothGexData(
+      gexData.strikes,
+      gexData.realtimeStrikeGexMillions,
+      gexData.globalStrikeGexMillions
+    );
     gexChart.$rawGexData = {
       strikes: gexData.strikes || [],
-      gex: gexData.gex || [],
-      gexGlobal: gexData.gexGlobal || []
+      realtimeStrikeGexMillions: gexData.realtimeStrikeGexMillions || [],
+      globalStrikeGexMillions: gexData.globalStrikeGexMillions || []
     };
     gexChart.data.labels = [];
     
     // Dataset 0: 实时状态
-    gexChart.data.datasets[0].data = smoothData.gex;
-    gexChart.data.datasets[0].pointBackgroundColor = smoothData.gex.map(() => 'rgba(255, 42, 95, 1)');
-    gexChart.data.datasets[0].pointBorderColor = smoothData.gex.map(() => 'rgba(255, 42, 95, 0.3)');
+    gexChart.data.datasets[0].data = smoothData.realtimeStrikeGex;
+    gexChart.data.datasets[0].pointBackgroundColor = smoothData.realtimeStrikeGex.map(() => 'rgba(255, 42, 95, 1)');
+    gexChart.data.datasets[0].pointBorderColor = smoothData.realtimeStrikeGex.map(() => 'rgba(255, 42, 95, 0.3)');
 
     // Dataset 1: 全局地图
-    gexChart.data.datasets[1].data = smoothData.gexGlobal;
-    gexChart.data.datasets[1].pointBackgroundColor = smoothData.gexGlobal.map(() => 'rgba(156, 163, 175, 0.85)');
-    gexChart.data.datasets[1].pointBorderColor = smoothData.gexGlobal.map(() => 'rgba(156, 163, 175, 0.25)');
+    gexChart.data.datasets[1].data = smoothData.globalStrikeGex;
+    gexChart.data.datasets[1].pointBackgroundColor = smoothData.globalStrikeGex.map(() => 'rgba(156, 163, 175, 0.85)');
+    gexChart.data.datasets[1].pointBorderColor = smoothData.globalStrikeGex.map(() => 'rgba(156, 163, 175, 0.25)');
 
     gexChart.options.plugins.verticalLines = [
       { value: point.spot, color: 'rgba(255, 204, 0, 0.5)', lineWidth: 1, dash: [4, 4], label: 'Spot', offset: 12 },
-      { value: gexData.callWall, color: 'rgba(156, 163, 175, 0.45)', lineWidth: 1, label: `Call Wall (${gexData.callWall || '无'})`, offset: 35 },
-      { value: gexData.putWall, color: 'rgba(255, 42, 95, 0.45)', lineWidth: 1, label: `Put Wall (${gexData.putWall || '无'})`, offset: 55 },
-      { value: gexData.zeroGamma, color: 'rgba(255, 255, 255, 0.35)', lineWidth: 1, dash: [2, 2], label: `ZeroGamma (${gexData.zeroGamma || '无'})`, offset: 75 }
+      { value: gexData.realtimeCallWall, color: 'rgba(156, 163, 175, 0.45)', lineWidth: 1, label: `Call Wall (${gexData.realtimeCallWall || '无'})`, offset: 35 },
+      { value: gexData.realtimePutWall, color: 'rgba(255, 42, 95, 0.45)', lineWidth: 1, label: `Put Wall (${gexData.realtimePutWall || '无'})`, offset: 55 },
+      { value: gexData.realtimeZeroGamma, color: 'rgba(255, 255, 255, 0.35)', lineWidth: 1, dash: [2, 2], label: `ZeroGamma (${gexData.realtimeZeroGamma || '无'})`, offset: 75 }
     ];
     gexChart.update('none');
   }
@@ -424,13 +389,13 @@ function renderReplayFrame() {
 
     const labels = historySub.map(h => h.time);
     const spots = historySub.map(h => h.spot);
-    const vwaps = historySub.map(h => h.vwap);
-    const dealerNotionals = historySub.map(h => h.dealerNotional || 0);
+    const globalGex = historySub.map(h => (h.globalTotalGex || 0) / 1e6);
+    const realtimeGex = historySub.map(h => (h.realtimeTotalGex || 0) / 1e6);
 
     historyChart.data.labels = labels;
     historyChart.data.datasets[0].data = spots;
-    historyChart.data.datasets[1].data = vwaps;
-    historyChart.data.datasets[2].data = dealerNotionals;
+    historyChart.data.datasets[1].data = globalGex;
+    historyChart.data.datasets[2].data = realtimeGex;
 
     historyChart.update('none');
   }
@@ -471,11 +436,11 @@ function catmullRomInterpolate(xs, ys, samplesPerSegment = 10) {
   return points;
 }
 
-function smoothGexData(strikes, gex, gexGlobal) {
+function smoothGexData(strikes, realtimeStrikeGex, globalStrikeGex) {
   const xs = (strikes || []).map(Number);
   return {
-    gex: catmullRomInterpolate(xs, gex || []),
-    gexGlobal: catmullRomInterpolate(xs, gexGlobal || [])
+    realtimeStrikeGex: catmullRomInterpolate(xs, realtimeStrikeGex || []),
+    globalStrikeGex: catmullRomInterpolate(xs, globalStrikeGex || [])
   };
 }
 
@@ -552,55 +517,17 @@ function updateUIState(state) {
   }
 
   spotVal.textContent = `$${state.spot.toFixed(2)}`;
-  vwapVal.textContent = `$${state.vwap.toFixed(2)}`;
-  
-  const diffPct = ((state.spot - state.vwap) / state.vwap) * 100;
-  priceDiffPercent.textContent = `${diffPct >= 0 ? '+' : ''}${diffPct.toFixed(2)}%`;
-  priceDiffPercent.className = diffPct >= 0 ? 'up-arrow' : 'down-arrow';
-
-  if (!state.latestReport) return;
-  const report = state.latestReport;
-
-  influenceVal.textContent = report.dealerInfluence.score;
-  regimeVal.textContent = report.dealerInfluence.regime;
-  
-  if (report.dealerInfluence.score >= 80) {
-    influenceCard.className = 'glass-panel metric-card green';
-  } else if (report.dealerInfluence.score >= 50) {
-    influenceCard.className = 'glass-panel metric-card gold';
-  } else {
-    influenceCard.className = 'glass-panel metric-card rose';
-  }
-
-  const dpi = report.pressureMetrics.dpi;
-  dpiVal.textContent = `${dpi >= 0 ? '+' : ''}${dpi.toFixed(2)}`;
-  
-  if (dpi >= 0) {
-    dpiProgressBar.style.left = '50%';
-    dpiProgressBar.style.width = `${dpi / 2.0}%`;
-    dpiProgressBar.style.background = 'var(--accent-cyan)';
-    dpiProgressBar.style.boxShadow = '0 0 8px var(--accent-cyan)';
-  } else {
-    dpiProgressBar.style.left = `${50 + (dpi / 2.0)}%`;
-    dpiProgressBar.style.width = `${Math.abs(dpi) / 2.0}%`;
-    dpiProgressBar.style.background = 'var(--accent-rose)';
-    dpiProgressBar.style.boxShadow = '0 0 8px var(--accent-rose)';
-  }
-
-  const notionalUSD = report.pressureMetrics.dealerNotionalUSD;
-  notionalVal.textContent = report.pressureMetrics.dealerNotionalText;
-  notionalCard.className = notionalUSD >= 0 ? 'glass-panel metric-card cyan' : 'glass-panel metric-card rose';
-
-  statusBadge.textContent = report.verification.status;
-  if (report.verification.status === 'EFFECTIVE') {
-    statusBadge.className = 'status-badge badge-effective';
-  } else if (report.verification.status === 'INEFFECTIVE') {
-    statusBadge.className = 'status-badge badge-ineffective';
-  } else {
-    statusBadge.className = 'status-badge badge-neutral';
-  }
-
-  reportContent.textContent = report.conclusion;
+  const gex = state.latestGex || {};
+  gexChangeVal.textContent = formatGex(gex.gexChange);
+  globalGexVal.textContent = formatGex(gex.globalTotalGex);
+  realtimeGexVal.textContent = formatGex(gex.realtimeTotalGex);
+  wallsVal.textContent = `${formatWall(gex.realtimePutWall)} / ${formatWall(gex.realtimeCallWall)}`;
+  zeroGammaVal.textContent = `Zero Gamma: ${formatWall(gex.realtimeZeroGamma)}`;
+  influenceCard.className = (gex.globalTotalGex || 0) >= 0 ? 'glass-panel metric-card green' : 'glass-panel metric-card rose';
+  wallsCard.className = (gex.realtimeTotalGex || 0) >= 0 ? 'glass-panel metric-card cyan' : 'glass-panel metric-card rose';
+  statusBadge.textContent = 'MODEL';
+  statusBadge.className = 'status-badge badge-neutral';
+  modelNoteContent.textContent = '实时 GEX 为基于大单流修正后的模型估算值，并非官方 OI。';
 }
 
 // ==========================================
@@ -746,7 +673,7 @@ function initCharts() {
               const nearestIdx = findNearestRawGexIndex(context.parsed.x);
               const raw = gexChart && gexChart.$rawGexData;
               if (nearestIdx >= 0 && raw) {
-                const values = context.datasetIndex === 0 ? raw.gex : raw.gexGlobal;
+                const values = context.datasetIndex === 0 ? raw.realtimeStrikeGexMillions : raw.globalStrikeGexMillions;
                 const rawValue = values && values[nearestIdx];
                 if (rawValue !== undefined) {
                   return `${datasetLabel}: ${formatCompactNumber(rawValue)}`;
@@ -776,17 +703,17 @@ function initCharts() {
           pointRadius: 0
         },
         {
-          label: 'VWAP',
+          label: 'Global GEX',
           data: [],
-          borderColor: 'rgba(255, 204, 0, 0.4)',
+          borderColor: 'rgba(156, 163, 175, 0.85)',
           borderWidth: 1.5,
           borderDash: [5, 5],
-          yAxisID: 'yPrice',
+          yAxisID: 'yNotional',
           tension: 0.1,
           pointRadius: 0
         },
         {
-          label: 'Hedge',
+          label: 'Realtime GEX',
           data: [],
           borderColor: '#00f2fe',
           borderWidth: 2,
@@ -815,7 +742,7 @@ function initCharts() {
           ticks: { color: '#00f2fe', font: { family: 'Inter' } },
           title: {
             display: true,
-            text: 'Hedge',
+            text: 'GEX ($M)',
             color: '#00f2fe',
             font: { family: 'Inter', size: 10, weight: 'bold' }
           }
@@ -842,30 +769,34 @@ function updateCharts() {
     .then(data => {
       if (!gexChart) return;
 
-      const smoothData = smoothGexData(data.strikes, data.gex, data.gexGlobal || []);
+      const smoothData = smoothGexData(
+        data.strikes,
+        data.realtimeStrikeGexMillions,
+        data.globalStrikeGexMillions
+      );
       gexChart.$rawGexData = {
         strikes: data.strikes || [],
-        gex: data.gex || [],
-        gexGlobal: data.gexGlobal || []
+        realtimeStrikeGexMillions: data.realtimeStrikeGexMillions || [],
+        globalStrikeGexMillions: data.globalStrikeGexMillions || []
       };
       gexChart.data.labels = [];
       
       // Dataset 0: 实时状态
-      gexChart.data.datasets[0].data = smoothData.gex;
-      gexChart.data.datasets[0].pointBackgroundColor = smoothData.gex.map(() => 'rgba(255, 42, 95, 1)');
-      gexChart.data.datasets[0].pointBorderColor = smoothData.gex.map(() => 'rgba(255, 42, 95, 0.3)');
+      gexChart.data.datasets[0].data = smoothData.realtimeStrikeGex;
+      gexChart.data.datasets[0].pointBackgroundColor = smoothData.realtimeStrikeGex.map(() => 'rgba(255, 42, 95, 1)');
+      gexChart.data.datasets[0].pointBorderColor = smoothData.realtimeStrikeGex.map(() => 'rgba(255, 42, 95, 0.3)');
 
       // Dataset 1: 全局地图
-      gexChart.data.datasets[1].data = smoothData.gexGlobal;
-      gexChart.data.datasets[1].pointBackgroundColor = smoothData.gexGlobal.map(() => 'rgba(156, 163, 175, 0.85)');
-      gexChart.data.datasets[1].pointBorderColor = smoothData.gexGlobal.map(() => 'rgba(156, 163, 175, 0.25)');
+      gexChart.data.datasets[1].data = smoothData.globalStrikeGex;
+      gexChart.data.datasets[1].pointBackgroundColor = smoothData.globalStrikeGex.map(() => 'rgba(156, 163, 175, 0.85)');
+      gexChart.data.datasets[1].pointBorderColor = smoothData.globalStrikeGex.map(() => 'rgba(156, 163, 175, 0.25)');
 
       const currentSpot = parseFloat(spotVal.textContent.replace('$', ''));
       gexChart.options.plugins.verticalLines = [
         { value: currentSpot, color: 'rgba(255, 204, 0, 0.5)', lineWidth: 1, dash: [4, 4], label: 'Spot', offset: 12 },
-        { value: data.callWall, color: 'rgba(156, 163, 175, 0.45)', lineWidth: 1, label: `Call Wall (${data.callWall || '无'})`, offset: 35 },
-        { value: data.putWall, color: 'rgba(255, 42, 95, 0.45)', lineWidth: 1, label: `Put Wall (${data.putWall || '无'})`, offset: 55 },
-        { value: data.zeroGamma, color: 'rgba(255, 255, 255, 0.35)', lineWidth: 1, dash: [2, 2], label: `ZeroGamma (${data.zeroGamma || '无'})`, offset: 75 }
+        { value: data.realtimeCallWall, color: 'rgba(156, 163, 175, 0.45)', lineWidth: 1, label: `Call Wall (${data.realtimeCallWall || '无'})`, offset: 35 },
+        { value: data.realtimePutWall, color: 'rgba(255, 42, 95, 0.45)', lineWidth: 1, label: `Put Wall (${data.realtimePutWall || '无'})`, offset: 55 },
+        { value: data.realtimeZeroGamma, color: 'rgba(255, 255, 255, 0.35)', lineWidth: 1, dash: [2, 2], label: `ZeroGamma (${data.realtimeZeroGamma || '无'})`, offset: 75 }
       ];
 
       gexChart.update('none');
@@ -884,13 +815,13 @@ function updateCharts() {
 
       const labels = history.map(h => h.time);
       const spots = history.map(h => h.spot);
-      const vwaps = history.map(h => h.vwap);
-      const dealerNotionals = history.map(h => h.dealerNotional || 0);
+      const globalGex = history.map(h => (h.globalTotalGex || 0) / 1e6);
+      const realtimeGex = history.map(h => (h.realtimeTotalGex || 0) / 1e6);
 
       historyChart.data.labels = labels;
       historyChart.data.datasets[0].data = spots;
-      historyChart.data.datasets[1].data = vwaps;
-      historyChart.data.datasets[2].data = dealerNotionals;
+      historyChart.data.datasets[1].data = globalGex;
+      historyChart.data.datasets[2].data = realtimeGex;
 
       historyChart.update('none');
     })

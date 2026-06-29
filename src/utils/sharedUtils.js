@@ -50,57 +50,6 @@ function calculateDayT(currentDateStr, expirationDateStr) {
 }
 
 /**
- * 根据计算矩阵提取 Call Wall, Put Wall 和 Zero Gamma
- * @param {Array} calculatedMatrix 
- * @returns {object} { callWall, putWall, zeroGamma }
- */
-function findStructureWalls(calculatedMatrix, fieldName = 'gex') {
-  if (!calculatedMatrix || calculatedMatrix.length === 0) {
-    return { callWall: null, putWall: null, zeroGamma: null };
-  }
-
-  const strikeGexMap = {};
-  calculatedMatrix.forEach(opt => {
-    const k = opt.strike;
-    strikeGexMap[k] = (strikeGexMap[k] || 0) + (opt[fieldName] || 0);
-  });
-
-  const uniqueStrikes = Object.keys(strikeGexMap).map(Number).sort((a, b) => a - b);
-
-  let callWall = null;
-  let putWall = null;
-  let maxGex = -Infinity;
-  let minGex = Infinity;
-
-  uniqueStrikes.forEach(k => {
-    const gex = strikeGexMap[k];
-    if (gex > maxGex) {
-      maxGex = gex;
-      callWall = k;
-    }
-    if (gex < minGex) {
-      minGex = gex;
-      putWall = k;
-    }
-  });
-
-  let zeroGamma = null;
-  for (let i = 0; i < uniqueStrikes.length - 1; i++) {
-    const k1 = uniqueStrikes[i];
-    const k2 = uniqueStrikes[i + 1];
-    const gex1 = strikeGexMap[k1];
-    const gex2 = strikeGexMap[k2];
-    
-    if (gex1 * gex2 < 0) {
-      zeroGamma = Math.abs(gex1) < Math.abs(gex2) ? k1 : k2;
-      break;
-    }
-  }
-
-  return { callWall, putWall, zeroGamma };
-}
-
-/**
  * 判定盘中大单交易的方向是客户买入（BUY）还是客户卖出（SELL）
  * @param {string} executionEstimate - trade.execution_estimate
  * @param {string|number} aggressorInd - trade.aggressor_ind
@@ -144,7 +93,6 @@ module.exports = {
   timeStringToSeconds,
   calculateT,
   calculateDayT,
-  findStructureWalls,
   determineTradeDirection,
   clampTradingTime
 };

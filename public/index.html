@@ -4,9 +4,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Dealer Pressure Engine v2.0 - 做市商被迫对冲流分析系统</title>
+  <title>GEX Structure Engine - Opening & Live Gamma Map</title>
   <!-- SEO Meta Tags -->
-  <meta name="description" content="基于做市商被迫对冲流的 0DTE/1DTE 实时量化分析与市场地形地图系统">
+  <meta name="description" content="基于开盘 OI 与盘中大单流修正的实时 GEX 市场结构地图">
   <!-- Stylesheets -->
   <link rel="stylesheet" href="css/style.css">
   <!-- Chart.js CDN -->
@@ -21,8 +21,8 @@
       <div class="brand">
         <div class="brand-logo"></div>
         <div>
-          <h1>DEALER PRESSURE ENGINE</h1>
-          <span>v2.0 Beta • 0DTE/1DTE Analyser</span>
+          <h1>GEX STRUCTURE ENGINE</h1>
+          <span>Opening OI • Flow-adjusted Live GEX</span>
         </div>
       </div>
 
@@ -76,45 +76,36 @@
 
     <!-- 3. 四个核心指标看板 -->
     <section class="metrics-grid">
-      <!-- 股价与 VWAP -->
       <div class="glass-panel metric-card gold">
-        <span class="metric-label">Spot / VWAP</span>
+        <span class="metric-label">Spot</span>
         <div class="metric-val" id="spotVal">$0.00</div>
         <div class="metric-sub">
-          <span>VWAP:</span>
-          <span id="vwapVal" style="color: #fff; font-weight: 600;">$0.00</span>
-          <span id="priceDiffPercent" style="margin-left: auto;">+0.00%</span>
+          <span>GEX Change:</span>
+          <span id="gexChangeVal" style="color: #fff; font-weight: 600;">$0.00</span>
         </div>
       </div>
 
-      <!-- 做市商影响力 -->
       <div class="glass-panel metric-card green" id="influenceCard">
-        <span class="metric-label">Dealer Influence</span>
-        <div class="metric-val" id="influenceVal">100</div>
+        <span class="metric-label">Global GEX</span>
+        <div class="metric-val" id="globalGexVal">$0.00</div>
         <div class="metric-sub">
-          <span>Regime:</span>
-          <span id="regimeVal" style="color: #fff; font-weight: 600;">Dealer Dominated</span>
+          <span>Opening OI projected at current spot</span>
         </div>
       </div>
 
-      <!-- DPI 指标 -->
       <div class="glass-panel metric-card cyan">
-        <span class="metric-label">DPI (Dealer Pressure Index)</span>
-        <div class="metric-val" id="dpiVal">0.00</div>
-        <div class="dpi-progress-wrapper">
-          <div class="dpi-track">
-            <div class="dpi-midline"></div>
-            <div id="dpiProgressBar" class="dpi-bar" style="background: var(--accent-cyan);"></div>
-          </div>
+        <span class="metric-label">Realtime GEX</span>
+        <div class="metric-val" id="realtimeGexVal">$0.00</div>
+        <div class="metric-sub">
+          <span>Opening OI + flow delta</span>
         </div>
       </div>
 
-      <!-- 做市商对冲名义金额 -->
-      <div class="glass-panel metric-card rose" id="notionalCard">
-        <span class="metric-label">Dealer Sensitivity (Stress Test Hedge Flow)</span>
-        <div class="metric-val" id="notionalVal">$0.00M</div>
+      <div class="glass-panel metric-card rose" id="wallsCard">
+        <span class="metric-label">Live Walls</span>
+        <div class="metric-val" id="wallsVal">-- / --</div>
         <div class="metric-sub">
-          <span>标准压力测试下被迫买卖 (敏感度)</span>
+          <span id="zeroGammaVal">Zero Gamma: --</span>
         </div>
       </div>
     </section>
@@ -139,10 +130,9 @@
         </div>
       </div>
 
-      <!-- 历史对冲名义金额与股价走势图 -->
       <div class="glass-panel">
         <div class="chart-header">
-          <h3 class="chart-title">Dealer Notional & Spot Intraday Trend</h3>
+          <h3 class="chart-title">GEX & Spot Intraday Trend</h3>
         </div>
         <div class="chart-wrapper">
           <canvas id="historyChart"></canvas>
@@ -150,15 +140,15 @@
       </div>
     </section>
 
-    <!-- 5. 决策解释面板 -->
+    <!-- 5. 模型说明面板 -->
     <section class="glass-panel analysis-panel">
       <div class="analysis-header">
         <h3 class="analysis-title">
-          <span style="font-size: 16px;">📋</span> Real-time Decision Report
+          Realtime Model Note
         </h3>
-        <div id="statusBadge" class="status-badge badge-neutral">NEUTRAL</div>
+        <div id="statusBadge" class="status-badge badge-neutral">MODEL</div>
       </div>
-      <div id="reportContent" class="report-content">正在载入做市商引擎报告...</div>
+      <div id="modelNoteContent" class="report-content">实时 GEX 为基于大单流修正后的模型估算值，并非官方 OI。</div>
     </section>
 
   </div>

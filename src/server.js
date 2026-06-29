@@ -14,7 +14,7 @@ const dns = require('dns');
 dns.setDefaultResultOrder('ipv4first');
 
 // 导入核心计算引擎与共享工具
-const { calculateImpliedVolatility, calculateBSGreeks } = require('./calculator/bsCalculator');
+const { calculateImpliedVolatility } = require('./calculator/bsCalculator');
 const { calculateT, clampTradingTime } = require('./utils/sharedUtils');
 const logger = require('./utils/logger')('server');
 
@@ -51,11 +51,7 @@ async function fetchWithRetry(url, options = {}, timeout = 10000, maxRetries = 3
 }
 
 const PositionStore = require('./store/positionStore');
-const FlowProcessor = require('./engine/flowProcessor');
-const Aggregator = require('./engine/aggregator');
-const RegimeManager = require('./engine/regimeManager');
-const PriceVerifier = require('./engine/priceVerifier');
-const DecisionEngine = require('./engine/decisionEngine');
+const GexAggregator = require('./engine/gexAggregator');
 
 const app = express();
 const PORT = process.env.PORT || 3080;
@@ -91,11 +87,8 @@ function getEstTimeDetails() {
 // ==========================================
 // 1. 初始化量化计算组件
 // ==========================================
-const store = new PositionStore({ oiFactor: 0.5 });
-const aggregator = new Aggregator();
-const regimeManager = new RegimeManager();
-const priceVerifier = new PriceVerifier();
-const decisionEngine = new DecisionEngine();
+const store = new PositionStore();
+const gexAggregator = new GexAggregator();
 
 // ==========================================
 // 2. 常量定义与股票配置
@@ -122,53 +115,9 @@ const sortedTickers = [
 
 const BUILTIN_TICKERS = sortedTickers.map(t => t.name.toUpperCase());
 const GEX_STRIKE_RADIUS = 20;
-const GEX_IV_DISPLAY_T = 1.0 / 365.0;
-const GEX_MIN_REALTIME_DISPLAY_T = 1.0 / (365.0 * 24.0 * 60.0);
 const liveTickerCounts = {};
 const knownSignalIds = new Set();
 let lastUpdatedCursor = 0;
-
-// Bug #12: 宏观事件日历支持 (FOMC 会议日程写死，CPI/NFP/PPI 动态从 FRED API 拉取)
-const FOMC_DATES = new Set([
-  "2026-01-28", "2026-03-18", "2026-04-29", "2026-06-17",
-  "2026-07-29", "2026-09-16", "2026-10-28", "2026-12-09"
-]);
-const macroEventDates = new Set([...FOMC_DATES]);
-
-async function fetchFredReleaseDates(releaseId, apiKey) {
-  const url = `https://api.stlouisfed.org/fred/release/dates?release_id=${releaseId}&api_key=${apiKey}&file_type=json&include_release_dates_with_no_data=true&realtime_start=2026-06-01`;
-  try {
-    const res = await fetchWithRetry(url, { headers: { 'Accept': 'application/json' } }, 10000);
-    if (res.status === 200) {
-      const data = await res.json();
-      if (data && Array.isArray(data.release_dates)) {
-        data.release_dates.forEach(d => {
-          if (d.date) {
-            macroEventDates.add(d.date);
-          }
-        });
-        logger.info(`[MacroEvents] Loaded ${data.release_dates.length} schedule dates for Release ID: ${releaseId}`);
-      }
-    } else {
-      logger.warn(`[MacroEvents] FRED API returned status ${res.status} for Release ID ${releaseId}`);
-    }
-  } catch (err) {
-    logger.error(`[MacroEvents] Failed to fetch FRED dates for Release ID ${releaseId}:`, err.message);
-  }
-}
-
-async function initializeMacroEvents() {
-  const apiKey = '4e13c5d72bb728e85358893dfae823ae'; // process.env.FRED_API_KEY;
-  if (!apiKey) {
-    logger.warn(`[MacroEvents] No FRED_API_KEY environment variable found. Only static FOMC calendar will be used.`);
-    return;
-  }
-  logger.info(`[MacroEvents] Initializing macro calendar from FRED API...`);
-  await fetchFredReleaseDates(10, apiKey); // CPI (ID: 10)
-  await fetchFredReleaseDates(50, apiKey); // NFP (ID: 50)
-  await fetchFredReleaseDates(46, apiKey); // PPI (ID: 46)
-  logger.info(`[MacroEvents] Total macro event dates loaded: ${macroEventDates.size}`);
-}
 
 function initializeGlobalCursorAndCounts() {
   const todayStr = getEstDateStr();
@@ -251,15 +200,11 @@ BUILTIN_TICKERS.forEach(ticker => {
     currentTimeSeconds: 0,
     trades: [],
     spot: null,
-    vwap: null,
-    vwapVolume: 0,
-    vwapNotional: 0,
     history: [],
-    latestReport: null,
     calculatedMatrix: [],
     matrixViews: { all: [], '0dte': [], weekly: [] },
     gexSummary: null,
-    flowProcessor: new FlowProcessor()
+    latestGex: null
   };
 });
 
@@ -447,159 +392,6 @@ function getStrikesAroundSpot(sortedStrikes, spot, radius = 10) {
   return sortedStrikes.slice(startIdx, endIdx + 1);
 }
 
-function calculatePlainBSGamma(S, K, T, r, sigma) {
-  if (T <= 0 || sigma <= 0) return 0;
-  const volSqT = sigma * Math.sqrt(T);
-  const d1 = (Math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / volSqT;
-  const pdfD1 = Math.exp(-0.5 * d1 * d1) / Math.sqrt(2.0 * Math.PI);
-  return pdfD1 / (S * volSqT);
-}
-
-function getContractMidpoint(contract) {
-  if (!contract) return 0;
-  if (contract.midpoint && contract.midpoint > 0) return contract.midpoint;
-  const bid = contract.bid || 0;
-  const ask = contract.ask || 0;
-  if (bid > 0 || ask > 0) return (bid + ask) / 2.0;
-  return 0;
-}
-
-function fillNearestValidIV(strikes, ivByStrike) {
-  strikes.forEach((strike, i) => {
-    if (ivByStrike[strike] && ivByStrike[strike] > 0.0002) return;
-
-    let left = i - 1;
-    let right = i + 1;
-    while (left >= 0 || right < strikes.length) {
-      if (left >= 0 && ivByStrike[strikes[left]] && ivByStrike[strikes[left]] > 0.0002) {
-        ivByStrike[strike] = ivByStrike[strikes[left]];
-        return;
-      }
-      if (right < strikes.length && ivByStrike[strikes[right]] && ivByStrike[strikes[right]] > 0.0002) {
-        ivByStrike[strike] = ivByStrike[strikes[right]];
-        return;
-      }
-      left--;
-      right++;
-    }
-
-    ivByStrike[strike] = 0.15;
-  });
-}
-
-function getWallsFromStrikeGex(strikeGexMap) {
-  const uniqueStrikes = Object.keys(strikeGexMap).map(Number).sort((a, b) => a - b);
-  if (uniqueStrikes.length === 0) {
-    return { callWall: null, putWall: null, zeroGamma: null };
-  }
-
-  let callWall = null;
-  let putWall = null;
-  let maxGex = -Infinity;
-  let minGex = Infinity;
-
-  uniqueStrikes.forEach(strike => {
-    const gex = strikeGexMap[strike];
-    if (gex > maxGex) {
-      maxGex = gex;
-      callWall = strike;
-    }
-    if (gex < minGex) {
-      minGex = gex;
-      putWall = strike;
-    }
-  });
-
-  let zeroGamma = null;
-  for (let i = 0; i < uniqueStrikes.length - 1; i++) {
-    const k1 = uniqueStrikes[i];
-    const k2 = uniqueStrikes[i + 1];
-    const gex1 = strikeGexMap[k1];
-    const gex2 = strikeGexMap[k2];
-    if (gex1 * gex2 < 0) {
-      zeroGamma = Math.abs(gex1) < Math.abs(gex2) ? k1 : k2;
-      break;
-    }
-  }
-
-  return { callWall, putWall, zeroGamma };
-}
-
-function calculateStaticStrikeGex(row, spot, T, iv) {
-  const gamma = calculatePlainBSGamma(spot, row.strike, T, 0.05, iv);
-  const gexShares = gamma * ((row.callOI || 0) - (row.putOI || 0)) * 100;
-  return gexShares * spot * spot * 0.01;
-}
-
-// 快速获取某时刻 GEX 暴露的静态汇总数据，用于纯前端的高速回放
-function getGexSummary(matrix, spot) {
-  const strikeRows = {};
-  matrix.forEach(opt => {
-    if (!strikeRows[opt.strike]) {
-      strikeRows[opt.strike] = { strike: opt.strike, call: null, put: null, callOI: 0, putOI: 0, t: opt.t };
-    }
-    if (opt.t && (!strikeRows[opt.strike].t || opt.t < strikeRows[opt.strike].t)) {
-      strikeRows[opt.strike].t = opt.t;
-    }
-
-    if (opt.type === 'CALL') {
-      strikeRows[opt.strike].call = strikeRows[opt.strike].call || opt;
-      strikeRows[opt.strike].callOI += opt.openInterest || 0;
-    } else if (opt.type === 'PUT') {
-      strikeRows[opt.strike].put = strikeRows[opt.strike].put || opt;
-      strikeRows[opt.strike].putOI += opt.openInterest || 0;
-    }
-  });
-  const sortedStrikes = Object.keys(strikeRows).map(Number).sort((a, b) => a - b);
-  const ivByStrike = {};
-
-  sortedStrikes.forEach(strike => {
-    const row = strikeRows[strike];
-    const otmContract = strike >= spot ? row.call : row.put;
-    const optionType = strike >= spot ? 'CALL' : 'PUT';
-    const price = getContractMidpoint(otmContract);
-
-    if (price > 0) {
-      const iv = calculateImpliedVolatility(spot, strike, GEX_IV_DISPLAY_T, 0.05, price, optionType);
-      ivByStrike[strike] = (!isNaN(iv) && iv > 0.0002) ? iv : null;
-    } else {
-      ivByStrike[strike] = null;
-    }
-  });
-  fillNearestValidIV(sortedStrikes, ivByStrike);
-
-  const strikeGexRealTime = {};
-  const strikeGexGlobal = {};
-  sortedStrikes.forEach(strike => {
-    const row = strikeRows[strike];
-    const iv = ivByStrike[strike];
-    const realtimeT = Math.max(row.t || GEX_MIN_REALTIME_DISPLAY_T, GEX_MIN_REALTIME_DISPLAY_T);
-    strikeGexRealTime[strike] = calculateStaticStrikeGex(row, spot, realtimeT, iv);
-    strikeGexGlobal[strike] = calculateStaticStrikeGex(row, spot, GEX_IV_DISPLAY_T, iv);
-  });
-
-  const strikes = [];
-  const gexRealTimeValues = [];
-  const gexGlobalValues = [];
-
-  const subStrikes = getStrikesAroundSpot(sortedStrikes, spot, GEX_STRIKE_RADIUS);
-  subStrikes.forEach(k => {
-    strikes.push(k);
-    gexRealTimeValues.push(strikeGexRealTime[k] / 1e6); // 折算为百万美元
-    gexGlobalValues.push((strikeGexGlobal[k] || 0) / 1e6);
-  });
-
-  const walls = getWallsFromStrikeGex(strikeGexGlobal);
-  return {
-    strikes,
-    gex: gexRealTimeValues,
-    gexGlobal: gexGlobalValues,
-    callWall: walls.callWall,
-    putWall: walls.putWall,
-    zeroGamma: walls.zeroGamma
-  };
-}
-
 function filterMatrixByExpiry(matrix, currentDateStr, expiryFilter = 'all') {
   if (expiryFilter === 'all') return matrix || [];
   return (matrix || []).filter(contract => {
@@ -621,17 +413,28 @@ function buildExpiryViews(matrix, currentDateStr) {
 }
 
 function buildGexSummaries(matrixViews, spot) {
+  return gexAggregator.buildSummaries(matrixViews, spot);
+}
+
+function getPrimaryGexMetrics(gexSummary) {
+  const all = gexSummary && gexSummary.all ? gexSummary.all : {};
   return {
-    all: getGexSummary(matrixViews.all, spot),
-    '0dte': getGexSummary(matrixViews['0dte'], spot),
-    weekly: getGexSummary(matrixViews.weekly, spot)
+    globalTotalGex: all.globalTotalGex || 0,
+    realtimeTotalGex: all.realtimeTotalGex || 0,
+    gexChange: all.gexChange || 0,
+    globalCallWall: all.globalCallWall || null,
+    globalPutWall: all.globalPutWall || null,
+    globalZeroGamma: all.globalZeroGamma || null,
+    realtimeCallWall: all.realtimeCallWall || null,
+    realtimePutWall: all.realtimePutWall || null,
+    realtimeZeroGamma: all.realtimeZeroGamma || null
   };
 }
 
 /**
  * 断点高精度时序回补：利用 trades.json 和期权定价反推，重建缺失的分钟走势数据
  */
-function backfillHistoryPoints(ticker, existingTrades, existingHistory, flowProcessorInstance) {
+function backfillHistoryPoints(ticker, existingTrades, existingHistory) {
   const todayStr = getEstDateStr();
   const historyMinutes = new Set(existingHistory.map(h => h.time));
 
@@ -678,19 +481,10 @@ function backfillHistoryPoints(ticker, existingTrades, existingHistory, flowProc
     }
   }
 
-  if (flowProcessorInstance) {
-    flowProcessorInstance.clear();
-  }
-
-  let vwapVolume = 0;
-  let vwapNotional = 0;
-
   // 如果大单为空且没有任何快照，则不需要回补
   if (sortedTrades.length === 0 && Object.keys(snapMap).length === 0) {
     return {
-      historyPoints: existingHistory,
-      vwapVolume: 0,
-      vwapNotional: 0
+      historyPoints: existingHistory
     };
   }
 
@@ -711,13 +505,6 @@ function backfillHistoryPoints(ticker, existingTrades, existingHistory, flowProc
 
       store.applyTrade(ticker, trade);
 
-      const tradePrice = parseFloat(trade.underlying_price);
-      const tradeSize = parseInt(trade.size) || 0;
-      if (!isNaN(tradePrice) && tradePrice > 0 && tradeSize > 0) {
-        vwapVolume += tradeSize;
-        vwapNotional += tradePrice * tradeSize;
-      }
-
       // 反推该合约在交易时刻的实时 IV
       let inferredIv = NaN;
       if (trade.midpoint && parseFloat(trade.midpoint) > 0) {
@@ -733,29 +520,12 @@ function backfillHistoryPoints(ticker, existingTrades, existingHistory, flowProc
           midpoint,
           trade.put_call.toUpperCase()
         );
-        if (!isNaN(inferredIv) && inferredIv > 0.0002) {
-          if (store.store[ticker] && store.store[ticker][trade.option_symbol]) {
-            store.store[ticker][trade.option_symbol].ivRealtime = inferredIv;
-            store.store[ticker][trade.option_symbol].iv = inferredIv;
+          if (!isNaN(inferredIv) && inferredIv > 0.0002) {
+            if (store.store[ticker] && store.store[ticker][trade.option_symbol]) {
+              store.store[ticker][trade.option_symbol].ivRealtime = inferredIv;
+            }
           }
-        }
       }
-
-      const T = calculateT(todayStr, trade.time, trade.date_expiration);
-      const strike = parseFloat(trade.strike_price);
-      const type = trade.put_call.toUpperCase();
-      const symbol = trade.option_symbol;
-      let iv = 0.20;
-      if (store.store[ticker] && store.store[ticker][symbol] && store.store[ticker][symbol].iv) {
-        iv = store.store[ticker][symbol].iv;
-      } else if (!isNaN(inferredIv) && inferredIv > 0.0002) {
-        iv = inferredIv;
-      }
-      const greeks = calculateBSGreeks(lastKnownSpot, strike, T, 0.05, iv, type, {});
-      if (flowProcessorInstance) {
-        flowProcessorInstance.processTrade(trade, greeks, lastKnownSpot);
-      }
-
       tradeIdx++;
     }
 
@@ -782,52 +552,20 @@ function backfillHistoryPoints(ticker, existingTrades, existingHistory, flowProc
       continue;
     }
 
-    // 执行 Greeks 与 DPI 生成并加入历史（即使没有今日的开盘 chainData，只要 store 里面有合约就行）
+    // 执行 Greeks/GEX 生成并加入历史（即使没有今日的开盘 chainData，只要 store 里面有合约就行）
     // clamp：收盘后(>= 16:00)统一用 15:59:50，防止 T=0 导致 GEX 全部归零
     const calcTimeStr = clampTradingTime(`${timeStr}:00`);
     const finalMatrix = store.calculateMatrixGEX(ticker, lastKnownSpot, 0.05, todayStr, calcTimeStr);
     if (finalMatrix && finalMatrix.length > 0) {
       const matrixViews = buildExpiryViews(finalMatrix, todayStr);
       const gexSummary = buildGexSummaries(matrixViews, lastKnownSpot);
-      const aggPressure = aggregator.aggregatePressure(finalMatrix, lastKnownSpot);
-      const agg0dte = aggregator.aggregatePressure(matrixViews['0dte'], lastKnownSpot);
-      const aggWeekly = aggregator.aggregatePressure(matrixViews.weekly, lastKnownSpot);
-
-      const currentVwap = vwapVolume > 0 ? (vwapNotional / vwapVolume) : lastKnownSpot;
-      let currentDpi = 0;
-      if (flowProcessorInstance) {
-        const rawDpi = flowProcessorInstance._calculateRawDPI();
-        if (flowProcessorInstance.cachedPercentileDenominator > 1e-4) {
-          currentDpi = (rawDpi / flowProcessorInstance.cachedPercentileDenominator) * 100;
-        }
-        currentDpi = Math.max(-100, Math.min(100, currentDpi));
-      }
-
-      // DPI 与决策报告计算
-      const influence = regimeManager.calculateDealerInfluence();
-      const influenceRegime = regimeManager.getInfluenceRegime(influence);
-      const verification = priceVerifier.verifyModel(lastKnownSpot, currentVwap, aggPressure.dealerNotional);
-      const report = decisionEngine.generateReport({
-        spot: lastKnownSpot,
-        vwap: currentVwap,
-        influenceScore: influence,
-        influenceRegime: influenceRegime,
-        calculatedMatrix: finalMatrix,
-        dpi: currentDpi,
-        aggPressure,
-        verification
-      });
+      const latestGex = getPrimaryGexMetrics(gexSummary);
 
       const newPoint = {
         time: timeStr,
         sec: sec,
         spot: lastKnownSpot,
-        vwap: currentVwap,
-        dpi: report.pressureMetrics.dpi,
-        dealerNotional: aggPressure.dealerNotional / 1e6,
-        dealerNotional_0dte: agg0dte.dealerNotional / 1e6,
-        dealerNotional_weekly: aggWeekly.dealerNotional / 1e6,
-        report: report,
+        ...latestGex,
         gexData: gexSummary
       };
 
@@ -845,9 +583,7 @@ function backfillHistoryPoints(ticker, existingTrades, existingHistory, flowProc
   });
 
   return {
-    historyPoints: Object.values(uniqueHistoryMap).sort((a, b) => a.sec - b.sec),
-    vwapVolume,
-    vwapNotional
+    historyPoints: Object.values(uniqueHistoryMap).sort((a, b) => a.sec - b.sec)
   };
 }
 
@@ -937,33 +673,18 @@ async function startLiveTracker(ticker) {
   const state = tickerStates[ticker];
   state.trades = existingTrades;
 
-  // 重置做市商大单压力队列，防止旧的压力数据跨天污染
-  if (state.flowProcessor) {
-    state.flowProcessor.clear();
-  }
-
-  // 6. 恢复历史大单，重建做市商今天的 Dealer 持仓状态并执行断点高精度历史回补
+  // 6. 恢复历史大单，重建今天的 flow-adjusted 模型持仓并执行断点历史回补
   if (chainData) {
     if (existingTrades.length > 0) {
       logger.info(`[Backfill] Replaying and backfilling missing history for ${ticker}...`);
-      const backfillResult = backfillHistoryPoints(ticker, existingTrades, existingHistory, state.flowProcessor);
+      const backfillResult = backfillHistoryPoints(ticker, existingTrades, existingHistory);
       existingHistory = backfillResult.historyPoints;
-      state.vwapVolume = backfillResult.vwapVolume;
-      state.vwapNotional = backfillResult.vwapNotional;
-      state.vwap = backfillResult.vwapVolume > 0 ? (backfillResult.vwapNotional / backfillResult.vwapVolume) : initialSpot;
       fs.writeFileSync(historyPath, JSON.stringify(existingHistory, null, 2));
       initialSpot = await getTickerSpotLive(ticker);
     } else {
       store.initializeChain(ticker, chainData, todayStr);
       store.initializeIVs(ticker, initialSpot, 0.05, todayStr, '09:30:00');
-      state.vwapVolume = 0;
-      state.vwapNotional = 0;
-      state.vwap = initialSpot;
     }
-  } else {
-    state.vwapVolume = 0;
-    state.vwapNotional = 0;
-    state.vwap = initialSpot;
   }
 
   state.spot = initialSpot;
@@ -980,22 +701,7 @@ async function startLiveTracker(ticker) {
     state.calculatedMatrix = finalMatrix;
     state.matrixViews = matrixViews;
     state.gexSummary = gexSummary;
-
-    const aggPressure = aggregator.aggregatePressure(finalMatrix, initialSpot);
-    const influence = regimeManager.calculateDealerInfluence();
-    const influenceRegime = regimeManager.getInfluenceRegime(influence);
-    const verification = priceVerifier.verifyModel(initialSpot, initialSpot, aggPressure.dealerNotional);
-
-    state.latestReport = decisionEngine.generateReport({
-      spot: initialSpot,
-      vwap: initialSpot,
-      influenceScore: influence,
-      influenceRegime: influenceRegime,
-      calculatedMatrix: finalMatrix,
-      dpi: 0,
-      aggPressure,
-      verification
-    });
+    state.latestGex = getPrimaryGexMetrics(gexSummary);
   }
 
   // 7. 启动该 Ticker 专属的 20 秒 Greeks 轮询定时器（仅在交易时间段内启动）
@@ -1121,42 +827,10 @@ async function pollLiveTrades() {
             if (!isNaN(inferredIv) && inferredIv > 0.0002) {
               if (store.store[ticker] && store.store[ticker][symbol]) {
                 store.store[ticker][symbol].ivRealtime = inferredIv;
-                store.store[ticker][symbol].iv = inferredIv;
               }
             }
           }
 
-          let iv = 0.20;
-          if (store.store[ticker] && store.store[ticker][symbol] && store.store[ticker][symbol].iv) {
-            iv = store.store[ticker][symbol].iv;
-          } else if (!isNaN(inferredIv) && inferredIv > 0.0002) {
-            iv = inferredIv;
-          }
-
-          // Bug #15: 防御 spot 为 null
-          if (!state.spot) {
-            return;
-          }
-          const greeks = calculateBSGreeks(state.spot, strike, T, 0.05, iv, type, {});
-          let latestDpi = 0;
-          if (state.flowProcessor) {
-            const result = state.flowProcessor.processTrade(trade, greeks, state.spot);
-            latestDpi = result.dpi;
-          }
-
-          // 更新实时加权 VWAP
-          const tradePrice = parseFloat(trade.underlying_price);
-          const tradeSize = parseInt(trade.size) || 0;
-          if (!isNaN(tradePrice) && tradePrice > 0 && tradeSize > 0) {
-            state.vwapVolume = (state.vwapVolume || 0) + tradeSize;
-            state.vwapNotional = (state.vwapNotional || 0) + tradePrice * tradeSize;
-            state.vwap = state.vwapNotional / state.vwapVolume;
-          }
-
-          // 更新最新报告中的 DPI 数值
-          if (state.latestReport && state.latestReport.pressureMetrics) {
-            state.latestReport.pressureMetrics.dpi = latestDpi;
-          }
         });
       }
     }
@@ -1315,31 +989,7 @@ async function pollLiveChainAndCalculate(ticker) {
   state.calculatedMatrix = finalMatrix;
   state.matrixViews = matrixViews;
   state.gexSummary = gexSummary;
-
-  const aggPressure = aggregator.aggregatePressure(finalMatrix, state.spot);
-
-  // Bug #12: 宏观事件评估与定价权自动扣分计算
-  const hasEventToday = macroEventDates.has(todayStr);
-  regimeManager.updateState({
-    hasMacroEvent: hasEventToday,
-    hasVolumeSpike: false,
-    hasVixGap: false,
-    hasAtrExpansion: false
-  });
-  const influence = regimeManager.calculateDealerInfluence();
-  const influenceRegime = regimeManager.getInfluenceRegime(influence);
-  const verification = priceVerifier.verifyModel(state.spot, state.vwap, aggPressure.dealerNotional);
-
-  state.latestReport = decisionEngine.generateReport({
-    spot: state.spot,
-    vwap: state.vwap,
-    influenceScore: influence,
-    influenceRegime: influenceRegime,
-    calculatedMatrix: finalMatrix,
-    dpi: state.latestReport ? state.latestReport.pressureMetrics.dpi : 0,
-    aggPressure,
-    verification
-  });
+  state.latestGex = getPrimaryGexMetrics(gexSummary);
 
   let existingHistory = [];
   if (fs.existsSync(historyPath)) {
@@ -1348,9 +998,6 @@ async function pollLiveChainAndCalculate(ticker) {
     } catch (e) { }
   }
 
-  const agg0dte = aggregator.aggregatePressure(matrixViews['0dte'], state.spot);
-  const aggWeekly = aggregator.aggregatePressure(matrixViews.weekly, state.spot);
-
   const minuteStr = timeNowStr.substring(0, 5); // 例如 "18:52"
   const alignedSec = Math.floor(state.currentTimeSeconds / 60) * 60; // 对齐整分秒数，例如 67920
 
@@ -1358,12 +1005,7 @@ async function pollLiveChainAndCalculate(ticker) {
     time: minuteStr,
     sec: alignedSec,
     spot: state.spot,
-    vwap: state.vwap,
-    dpi: state.latestReport.pressureMetrics.dpi,
-    dealerNotional: aggPressure.dealerNotional / 1e6,
-    dealerNotional_0dte: agg0dte.dealerNotional / 1e6,
-    dealerNotional_weekly: aggWeekly.dealerNotional / 1e6,
-    report: state.latestReport,
+    ...state.latestGex,
     gexData: gexSummary
   };
 
@@ -1447,7 +1089,7 @@ async function startTradingPolls() {
   for (const ticker of BUILTIN_TICKERS) {
     const liveDir = path.join(__dirname, '../data/live_data', getEstDateStr(), ticker);
     const openChainPath = path.join(liveDir, 'optionchains_open.json');
-    if (!tickerStates[ticker].latestReport || !fs.existsSync(openChainPath)) {
+    if (!tickerStates[ticker].latestGex || !fs.existsSync(openChainPath)) {
       try {
         logger.info(`[Scheduler] Ticker ${ticker} not initialized, fetching now...`);
         await startLiveTracker(ticker);
@@ -1550,14 +1192,13 @@ app.get('/api/state', async (req, res) => {
   const ticker = (req.query.ticker || 'AAPL').toUpperCase();
   const state = getTickerState(ticker);
   if (state) {
-    if (!state.latestReport || !state.history || state.history.length === 0) {
+    if (!state.latestGex || !state.history || state.history.length === 0) {
       const latestHistory = getLatestHistoryForTicker(ticker);
       if (latestHistory.history.length > 0) {
         const lastPoint = latestHistory.history[latestHistory.history.length - 1];
         state.history = latestHistory.history;
         state.spot = lastPoint.spot || state.spot;
-        state.vwap = lastPoint.vwap || state.vwap;
-        state.latestReport = lastPoint.report || state.latestReport;
+        state.latestGex = getPrimaryGexMetrics(lastPoint.gexData) || state.latestGex;
         if (lastPoint.gexData) {
           state.gexSummary = lastPoint.gexData;
         }
@@ -1567,9 +1208,6 @@ app.get('/api/state', async (req, res) => {
     const quotePrices = await fetchTipRanksQuotePrices([ticker]);
     if (quotePrices[ticker]) {
       state.spot = quotePrices[ticker];
-      if (!state.vwapVolume) {
-        state.vwap = state.spot;
-      }
     }
   }
   res.json(getClientState(ticker));
@@ -1638,7 +1276,17 @@ app.get('/api/gex', async (req, res) => {
   const ticker = (req.query.ticker || 'AAPL').toUpperCase();
   const expiry = req.query.expiry || 'all';
   const todayStr = getEstDateStr();
-  const emptySummary = { strikes: [], gex: [], gexGlobal: [], callWall: null, putWall: null, zeroGamma: null };
+  const emptySummary = {
+    strikes: [],
+    realtimeStrikeGexMillions: [],
+    globalStrikeGexMillions: [],
+    realtimeCallWall: null,
+    realtimePutWall: null,
+    realtimeZeroGamma: null,
+    globalCallWall: null,
+    globalPutWall: null,
+    globalZeroGamma: null
+  };
 
   const state = getTickerState(ticker);
   if (!state) {
@@ -1691,8 +1339,7 @@ app.get('/api/history', (req, res) => {
         state.history = historyPoints;
         const lastPoint = historyPoints[historyPoints.length - 1];
         state.spot = lastPoint.spot || state.spot;
-        state.vwap = lastPoint.vwap || state.vwap;
-        state.latestReport = lastPoint.report || state.latestReport;
+        state.latestGex = getPrimaryGexMetrics(lastPoint.gexData) || state.latestGex;
         if (lastPoint.gexData) {
           state.gexSummary = lastPoint.gexData;
         }
@@ -1705,18 +1352,20 @@ app.get('/api/history', (req, res) => {
   }
 
   const formattedHistory = historyPoints.map(h => {
-    let notional = h.dealerNotional;
-    if (expiry === '0dte') notional = h.dealerNotional_0dte;
-    if (expiry === 'weekly') notional = h.dealerNotional_weekly;
     return {
       time: h.time,
       date: h.date || historyDate,
       sec: h.sec,
       spot: h.spot,
-      vwap: h.vwap,
-      dpi: h.dpi,
-      dealerNotional: notional,
-      report: h.report,
+      globalTotalGex: h.globalTotalGex,
+      realtimeTotalGex: h.realtimeTotalGex,
+      gexChange: h.gexChange,
+      globalCallWall: h.globalCallWall,
+      globalPutWall: h.globalPutWall,
+      globalZeroGamma: h.globalZeroGamma,
+      realtimeCallWall: h.realtimeCallWall,
+      realtimePutWall: h.realtimePutWall,
+      realtimeZeroGamma: h.realtimeZeroGamma,
       gexData: h.gexData
     };
   });
@@ -1766,8 +1415,7 @@ function getClientState(ticker) {
       currentTimePct: 0,
       speedMultiplier: 1,
       spot: 0,
-      vwap: 0,
-      latestReport: null
+      latestGex: null
     };
   }
   return {
@@ -1777,16 +1425,14 @@ function getClientState(ticker) {
     currentTimePct: ((state.currentTimeSeconds - 9.5 * 3600) / (6.5 * 3600)) * 100,
     speedMultiplier: 1,
     spot: state.spot,
-    vwap: state.vwap,
-    latestReport: state.latestReport
+    latestGex: state.latestGex
   };
 }
 
 // 启动 Express 监听并加载宏观日历
 app.listen(PORT, async () => {
-  await initializeMacroEvents();
   logger.info(`==========================================`);
-  logger.info(`Dealer Pressure Engine v2.0 is running at:`);
-  logger.info(`🚀 http://localhost:${PORT}`);
+  logger.info(`GEX Structure Engine is running at:`);
+  logger.info(`http://localhost:${PORT}`);
   logger.info(`==========================================`);
 });
