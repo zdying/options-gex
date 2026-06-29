@@ -45,6 +45,26 @@ function formatWall(value) {
   return Number.isFinite(num) ? `$${num.toFixed(num >= 100 ? 0 : 2)}` : '--';
 }
 
+function getPointGexMetrics(point, expiry) {
+  const scopedGex = point && point.gexData ? point.gexData[expiry] : null;
+  const source = scopedGex || {};
+  const globalTotalGex = Number(source.globalTotalGex) || 0;
+  const realtimeTotalGex = Number(source.realtimeTotalGex) || 0;
+  const sourceGexChange = Number(source.gexChange);
+
+  return {
+    globalTotalGex,
+    realtimeTotalGex,
+    gexChange: Number.isFinite(sourceGexChange) ? sourceGexChange : realtimeTotalGex - globalTotalGex,
+    globalCallWall: source.globalCallWall,
+    globalPutWall: source.globalPutWall,
+    globalZeroGamma: source.globalZeroGamma,
+    realtimeCallWall: source.realtimeCallWall,
+    realtimePutWall: source.realtimePutWall,
+    realtimeZeroGamma: source.realtimeZeroGamma
+  };
+}
+
 // ==========================================
 // 1. 初始化 Chart.js 垂直标注线插件
 // ==========================================
@@ -93,11 +113,11 @@ const mobileYAxisLabelsPlugin = {
     if (!chart.canvas || !['gexChart', 'historyChart'].includes(chart.canvas.id)) return;
 
     const mobile = isMobileChartLayout(chart);
-    const leftAxisId = chart.canvas.id === 'gexChart' ? 'y' : 'yPrice';
-    const rightAxisId = chart.canvas.id === 'gexChart' ? 'yGlobal' : 'yNotional';
+    const leftAxisId = chart.canvas.id === 'gexChart' ? 'y' : 'yNotional';
+    const rightAxisId = chart.canvas.id === 'gexChart' ? 'yGlobal' : 'yChange';
     const y = chart.options.scales[leftAxisId];
     const yGlobal = chart.options.scales[rightAxisId];
-    if (!y || !yGlobal) return;
+    if (!y) return;
 
     y.ticks.display = true;
     y.ticks.mirror = mobile;
@@ -106,6 +126,8 @@ const mobileYAxisLabelsPlugin = {
     y.afterFit = scale => {
       if (isMobileChartLayout(chart)) scale.width = 8;
     };
+
+    if (!yGlobal || yGlobal === y) return;
 
     yGlobal.ticks.display = true;
     yGlobal.ticks.mirror = mobile;
@@ -330,6 +352,8 @@ function renderReplayFrame() {
   if (replayHistory.length === 0 || replayIndex >= replayHistory.length) return;
 
   const point = replayHistory[replayIndex];
+  const expiry = document.getElementById('expiryFilter').value;
+  const pointGex = getPointGexMetrics(point, expiry);
 
   // 1. 更新模拟时钟与进度条
   simClock.textContent = point.time + ":00";
@@ -338,16 +362,15 @@ function renderReplayFrame() {
 
   // 2. 更新核心 GEX 指标
   spotVal.textContent = `$${point.spot.toFixed(2)}`;
-  gexChangeVal.textContent = formatGex(point.gexChange);
-  globalGexVal.textContent = formatGex(point.globalTotalGex);
-  realtimeGexVal.textContent = formatGex(point.realtimeTotalGex);
-  wallsVal.textContent = `${formatWall(point.realtimePutWall)} / ${formatWall(point.realtimeCallWall)}`;
-  zeroGammaVal.textContent = `Zero Gamma: ${formatWall(point.realtimeZeroGamma)}`;
-  influenceCard.className = point.globalTotalGex >= 0 ? 'glass-panel metric-card green' : 'glass-panel metric-card rose';
-  wallsCard.className = point.realtimeTotalGex >= 0 ? 'glass-panel metric-card cyan' : 'glass-panel metric-card rose';
+  gexChangeVal.textContent = formatGex(pointGex.gexChange);
+  globalGexVal.textContent = formatGex(pointGex.globalTotalGex);
+  realtimeGexVal.textContent = formatGex(pointGex.realtimeTotalGex);
+  wallsVal.textContent = `${formatWall(pointGex.realtimePutWall)} / ${formatWall(pointGex.realtimeCallWall)}`;
+  zeroGammaVal.textContent = `Zero Gamma: ${formatWall(pointGex.realtimeZeroGamma)}`;
+  influenceCard.className = pointGex.globalTotalGex >= 0 ? 'glass-panel metric-card green' : 'glass-panel metric-card rose';
+  wallsCard.className = pointGex.realtimeTotalGex >= 0 ? 'glass-panel metric-card cyan' : 'glass-panel metric-card rose';
 
   // 4. 更新 GEX 柱状图
-  const expiry = document.getElementById('expiryFilter').value;
   const gexData = point.gexData ? point.gexData[expiry] : null;
   updateGexChartTitle(tickerSelect.value, expiry, point.date, point.time);
 
@@ -388,14 +411,14 @@ function renderReplayFrame() {
     const historySub = replayHistory.slice(0, replayIndex + 1);
 
     const labels = historySub.map(h => h.time);
-    const spots = historySub.map(h => h.spot);
-    const globalGex = historySub.map(h => (h.globalTotalGex || 0) / 1e6);
-    const realtimeGex = historySub.map(h => (h.realtimeTotalGex || 0) / 1e6);
+    const globalGex = historySub.map(h => getPointGexMetrics(h, expiry).globalTotalGex / 1e6);
+    const realtimeGex = historySub.map(h => getPointGexMetrics(h, expiry).realtimeTotalGex / 1e6);
+    const gexChange = historySub.map(h => getPointGexMetrics(h, expiry).gexChange / 1e6);
 
     historyChart.data.labels = labels;
-    historyChart.data.datasets[0].data = spots;
-    historyChart.data.datasets[1].data = globalGex;
-    historyChart.data.datasets[2].data = realtimeGex;
+    historyChart.data.datasets[0].data = globalGex;
+    historyChart.data.datasets[1].data = realtimeGex;
+    historyChart.data.datasets[2].data = gexChange;
 
     historyChart.update('none');
   }
@@ -694,15 +717,6 @@ function initCharts() {
       labels: [],
       datasets: [
         {
-          label: 'Spot',
-          data: [],
-          borderColor: '#ffcc00',
-          borderWidth: 2,
-          yAxisID: 'yPrice',
-          tension: 0.1,
-          pointRadius: 0
-        },
-        {
           label: 'Global GEX',
           data: [],
           borderColor: 'rgba(156, 163, 175, 0.85)',
@@ -720,6 +734,16 @@ function initCharts() {
           yAxisID: 'yNotional',
           tension: 0.1,
           pointRadius: 0
+        },
+        {
+          label: 'GEX Change',
+          data: [],
+          borderColor: '#ffcc00',
+          borderWidth: 2,
+          borderDash: [2, 4],
+          yAxisID: 'yChange',
+          tension: 0.1,
+          pointRadius: 0
         }
       ]
     },
@@ -731,19 +755,25 @@ function initCharts() {
           grid: { color: 'rgba(255, 255, 255, 0.03)' },
           ticks: { color: '#9ca3af', font: { family: 'Inter' } }
         },
-        yPrice: {
+        yNotional: {
           position: 'left',
           grid: { color: 'rgba(255, 255, 255, 0.05)' },
-          ticks: { color: '#ffcc00', font: { family: 'Inter' } }
-        },
-        yNotional: {
-          position: 'right',
-          grid: { drawOnChartArea: false },
           ticks: { color: '#00f2fe', font: { family: 'Inter' } },
           title: {
             display: true,
-            text: 'GEX ($M)',
+            text: 'Total GEX ($M)',
             color: '#00f2fe',
+            font: { family: 'Inter', size: 10, weight: 'bold' }
+          }
+        },
+        yChange: {
+          position: 'right',
+          grid: { drawOnChartArea: false },
+          ticks: { color: '#ffcc00', font: { family: 'Inter' } },
+          title: {
+            display: true,
+            text: 'GEX Change ($M)',
+            color: '#ffcc00',
             font: { family: 'Inter', size: 10, weight: 'bold' }
           }
         }
@@ -814,14 +844,14 @@ function updateCharts() {
       updateGexChartTitle(ticker, expiry, latestPoint.date, latestPoint.time);
 
       const labels = history.map(h => h.time);
-      const spots = history.map(h => h.spot);
-      const globalGex = history.map(h => (h.globalTotalGex || 0) / 1e6);
-      const realtimeGex = history.map(h => (h.realtimeTotalGex || 0) / 1e6);
+      const globalGex = history.map(h => getPointGexMetrics(h, expiry).globalTotalGex / 1e6);
+      const realtimeGex = history.map(h => getPointGexMetrics(h, expiry).realtimeTotalGex / 1e6);
+      const gexChange = history.map(h => getPointGexMetrics(h, expiry).gexChange / 1e6);
 
       historyChart.data.labels = labels;
-      historyChart.data.datasets[0].data = spots;
-      historyChart.data.datasets[1].data = globalGex;
-      historyChart.data.datasets[2].data = realtimeGex;
+      historyChart.data.datasets[0].data = globalGex;
+      historyChart.data.datasets[1].data = realtimeGex;
+      historyChart.data.datasets[2].data = gexChange;
 
       historyChart.update('none');
     })

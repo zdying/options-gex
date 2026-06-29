@@ -436,6 +436,25 @@ function getPrimaryGexMetrics(gexSummary) {
   };
 }
 
+function getGexMetricsForExpiry(historyPoint, expiry = 'all') {
+  const expiryGex = historyPoint && historyPoint.gexData && historyPoint.gexData[expiry];
+  const source = expiryGex || {};
+  const globalTotalGex = Number(source.globalTotalGex) || 0;
+  const realtimeTotalGex = Number(source.realtimeTotalGex) || 0;
+  const sourceGexChange = Number(source.gexChange);
+  return {
+    globalTotalGex,
+    realtimeTotalGex,
+    gexChange: Number.isFinite(sourceGexChange) ? sourceGexChange : realtimeTotalGex - globalTotalGex,
+    globalCallWall: source.globalCallWall || null,
+    globalPutWall: source.globalPutWall || null,
+    globalZeroGamma: source.globalZeroGamma || null,
+    realtimeCallWall: source.realtimeCallWall || null,
+    realtimePutWall: source.realtimePutWall || null,
+    realtimeZeroGamma: source.realtimeZeroGamma || null
+  };
+}
+
 /**
  * 断点高精度时序回补：利用 trades.json 和期权定价反推，重建缺失的分钟走势数据
  */
@@ -1361,20 +1380,13 @@ app.get('/api/history', (req, res) => {
   }
 
   const formattedHistory = historyPoints.map(h => {
+    const expiryMetrics = getGexMetricsForExpiry(h, expiry);
     return {
       time: h.time,
       date: h.date || historyDate,
       sec: h.sec,
       spot: h.spot,
-      globalTotalGex: h.globalTotalGex,
-      realtimeTotalGex: h.realtimeTotalGex,
-      gexChange: h.gexChange,
-      globalCallWall: h.globalCallWall,
-      globalPutWall: h.globalPutWall,
-      globalZeroGamma: h.globalZeroGamma,
-      realtimeCallWall: h.realtimeCallWall,
-      realtimePutWall: h.realtimePutWall,
-      realtimeZeroGamma: h.realtimeZeroGamma,
+      ...expiryMetrics,
       gexData: h.gexData
     };
   });
