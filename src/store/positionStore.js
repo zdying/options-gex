@@ -7,13 +7,16 @@
 
 const { calculateBSGreeks, calculateImpliedVolatility } = require('../calculator/bsCalculator');
 const { calculateT, calculateDayT, determineTradeDirection } = require('../utils/sharedUtils');
+const pricingConfig = require('../config/pricingConfig');
 
 class PositionStore {
   constructor(config = {}) {
     // 内存持仓字典：{ [ticker]: { [optionSymbol]: optionContractObject } }
     this.store = {};
 
-    this.minRealtimeTMinutes = config.minRealtimeTMinutes !== undefined ? config.minRealtimeTMinutes : 5;
+    this.riskFreeRate = config.riskFreeRate !== undefined ? config.riskFreeRate : pricingConfig.riskFreeRate;
+    this.dividendYieldByTicker = config.dividendYieldByTicker || pricingConfig.dividendYieldByTicker;
+    this.minRealtimeTMinutes = config.minRealtimeTMinutes !== undefined ? config.minRealtimeTMinutes : pricingConfig.minRealtimeTMinutes;
   }
 
   /**
@@ -147,7 +150,7 @@ class PositionStore {
    * 根据当前持仓与当前股价，重新计算每个合约的希腊字母和 GEX
    * @param {string} ticker - 标的资产代码
    * @param {number} spot - 当前正股价格
-   * @param {number} r - 年化无风险利率 (默认 0.05)
+   * @param {number} r - 年化无风险利率
    * @param {string} currentDateStr - 当前计算日期 (YYYY-MM-DD，用于计算剩余期限 T)
    * @param {string} [currentTimeStr="09:30:00"] - 盘中当前时间 (HH:MM:SS)
    * @param {string} [expiryFilter="all"] - 到期日过滤器 (all / 0dte / weekly)
@@ -158,6 +161,9 @@ class PositionStore {
     if (!spot) {
       return [];
     }
+    const uppercaseTicker = ticker.toUpperCase();
+    const effectiveR = r !== undefined ? r : this.riskFreeRate;
+    const q = this._getDividendYield(uppercaseTicker);
     const matrix = this.getPositionMatrix(ticker);
 
     return matrix.map(contract => {
@@ -192,7 +198,7 @@ class PositionStore {
       // 动态反推实时 IV：使用分钟级 T，供实时 GEX 使用
       let ivRealtime = contract.ivRealtime;
       if (ivRealtime === undefined || ivRealtime === null) {
-        ivRealtime = calculateImpliedVolatility(spot, contract.strike, T, r, marketPrice, contract.type);
+        ivRealtime = calculateImpliedVolatility(spot, contract.strike, T, effectiveR, q, marketPrice, contract.type);
         if (isNaN(ivRealtime) || ivRealtime <= 0.0002) {
           ivRealtime = 0.20; // 实在算不出来的回退默认值为 20%，更贴近真实大盘 (SPY/QQQ) 的底噪 IV
         }
@@ -200,7 +206,7 @@ class PositionStore {
       }
 
       // 计算实时 Greeks
-      const greeks = calculateBSGreeks(spot, contract.strike, T, r, ivRealtime, contract.type, greeksConfig);
+      const greeks = calculateBSGreeks(spot, contract.strike, T, effectiveR, q, ivRealtime, contract.type, greeksConfig);
 
       const openingOI = contract.openingOI || 0;
       const flowPositionDelta = contract.flowPositionDelta || 0;
@@ -214,18 +220,19 @@ class PositionStore {
       const T_global = calculateDayT(currentDateStr, contract.expiration);
       let ivGlobal = contract.ivGlobal;
       if (ivGlobal === undefined || ivGlobal === null) {
-        ivGlobal = calculateImpliedVolatility(spot, contract.strike, T_global, r, marketPrice, contract.type);
+        ivGlobal = calculateImpliedVolatility(spot, contract.strike, T_global, effectiveR, q, marketPrice, contract.type);
         if (isNaN(ivGlobal) || ivGlobal <= 0.0002) {
           ivGlobal = 0.20;
         }
         contract.ivGlobal = ivGlobal;
       }
-      const greeks_global = calculateBSGreeks(spot, contract.strike, T_global, r, ivGlobal, contract.type, greeksConfig);
+      const greeks_global = calculateBSGreeks(spot, contract.strike, T_global, effectiveR, q, ivGlobal, contract.type, greeksConfig);
       const globalGex = globalSignedPosition * greeks_global.gamma * 100 * (spot * spot) * 0.01;
 
       return {
         ...contract,
         openingOI,
+        dividendYield: q,
         flowPositionDelta,
         realtimePosition,
         t: T,
@@ -259,20 +266,22 @@ class PositionStore {
       return;
     }
     const uppercaseTicker = ticker.toUpperCase();
+    const effectiveR = r !== undefined ? r : this.riskFreeRate;
+    const q = this._getDividendYield(uppercaseTicker);
     const matrix = this.getPositionMatrix(uppercaseTicker);
     
     matrix.forEach(contract => {
       // Bug #7: 使用共享工具类计算 T
       const T = calculateT(currentDateStr, currentTimeStr, contract.expiration);
       const marketPrice = contract.midpoint || ((contract.bid + contract.ask) / 2.0) || 0.1;
-      let iv = calculateImpliedVolatility(spot, contract.strike, T, r, marketPrice, contract.type);
+      let iv = calculateImpliedVolatility(spot, contract.strike, T, effectiveR, q, marketPrice, contract.type);
       if (isNaN(iv) || iv <= 0.0002) {
         iv = 0.20; // 实在算不出的回退默认值为 20%
       }
       contract.ivRealtime = iv;
 
       const T_global = calculateDayT(currentDateStr, contract.expiration);
-      let ivGlobal = calculateImpliedVolatility(spot, contract.strike, T_global, r, marketPrice, contract.type);
+      let ivGlobal = calculateImpliedVolatility(spot, contract.strike, T_global, effectiveR, q, marketPrice, contract.type);
       if (isNaN(ivGlobal) || ivGlobal <= 0.0002) {
         ivGlobal = 0.20;
       }
@@ -335,6 +344,10 @@ class PositionStore {
 
   _toSignedPosition(position, optionType) {
     return optionType === 'PUT' ? -position : position;
+  }
+
+  _getDividendYield(ticker) {
+    return this.dividendYieldByTicker[ticker] || 0;
   }
 
   /**

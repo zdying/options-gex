@@ -16,6 +16,7 @@ dns.setDefaultResultOrder('ipv4first');
 // 导入核心计算引擎与共享工具
 const { calculateImpliedVolatility } = require('./calculator/bsCalculator');
 const { calculateT, clampTradingTime } = require('./utils/sharedUtils');
+const pricingConfig = require('./config/pricingConfig');
 const logger = require('./utils/logger')('server');
 
 /**
@@ -87,8 +88,8 @@ function getEstTimeDetails() {
 // ==========================================
 // 1. 初始化量化计算组件
 // ==========================================
-const store = new PositionStore();
-const gexAggregator = new GexAggregator();
+const store = new PositionStore(pricingConfig);
+const gexAggregator = new GexAggregator(pricingConfig);
 
 // ==========================================
 // 2. 常量定义与股票配置
@@ -118,6 +119,10 @@ const GEX_STRIKE_RADIUS = 20;
 const liveTickerCounts = {};
 const knownSignalIds = new Set();
 let lastUpdatedCursor = 0;
+
+function getDividendYield(ticker) {
+  return pricingConfig.dividendYieldByTicker[String(ticker || '').toUpperCase()] || 0;
+}
 
 function initializeGlobalCursorAndCounts() {
   const todayStr = getEstDateStr();
@@ -436,6 +441,7 @@ function getPrimaryGexMetrics(gexSummary) {
  */
 function backfillHistoryPoints(ticker, existingTrades, existingHistory) {
   const todayStr = getEstDateStr();
+  const q = getDividendYield(ticker);
   const historyMinutes = new Set(existingHistory.map(h => h.time));
 
   // 1. 将 trades 按时间排序
@@ -516,7 +522,8 @@ function backfillHistoryPoints(ticker, existingTrades, existingHistory) {
           lastKnownSpot,
           strike,
           T,
-          0.05,
+          pricingConfig.riskFreeRate,
+          q,
           midpoint,
           trade.put_call.toUpperCase()
         );
@@ -555,7 +562,7 @@ function backfillHistoryPoints(ticker, existingTrades, existingHistory) {
     // 执行 Greeks/GEX 生成并加入历史（即使没有今日的开盘 chainData，只要 store 里面有合约就行）
     // clamp：收盘后(>= 16:00)统一用 15:59:50，防止 T=0 导致 GEX 全部归零
     const calcTimeStr = clampTradingTime(`${timeStr}:00`);
-    const finalMatrix = store.calculateMatrixGEX(ticker, lastKnownSpot, 0.05, todayStr, calcTimeStr);
+    const finalMatrix = store.calculateMatrixGEX(ticker, lastKnownSpot, pricingConfig.riskFreeRate, todayStr, calcTimeStr);
     if (finalMatrix && finalMatrix.length > 0) {
       const matrixViews = buildExpiryViews(finalMatrix, todayStr);
       const gexSummary = buildGexSummaries(matrixViews, lastKnownSpot);
@@ -683,7 +690,7 @@ async function startLiveTracker(ticker) {
       initialSpot = await getTickerSpotLive(ticker);
     } else {
       store.initializeChain(ticker, chainData, todayStr);
-      store.initializeIVs(ticker, initialSpot, 0.05, todayStr, '09:30:00');
+      store.initializeIVs(ticker, initialSpot, pricingConfig.riskFreeRate, todayStr, '09:30:00');
     }
   }
 
@@ -695,7 +702,7 @@ async function startLiveTracker(ticker) {
   state.currentTimeSeconds = estDetails.seconds;
 
   if (chainData) {
-    const finalMatrix = store.calculateMatrixGEX(ticker, initialSpot, 0.05, todayStr, clampTradingTime(timeNowStr));
+    const finalMatrix = store.calculateMatrixGEX(ticker, initialSpot, pricingConfig.riskFreeRate, todayStr, clampTradingTime(timeNowStr));
     const matrixViews = buildExpiryViews(finalMatrix, todayStr);
     const gexSummary = buildGexSummaries(matrixViews, initialSpot);
     state.calculatedMatrix = finalMatrix;
@@ -777,6 +784,7 @@ async function pollLiveTrades() {
 
     for (const ticker of Object.keys(tradesByTicker)) {
       const newTrades = tradesByTicker[ticker];
+      const q = getDividendYield(ticker);
       if (newTrades.length === 0) continue;
 
       logger.info(`[LiveTrades] Found ${newTrades.length} new unique trades for ${ticker}.`);
@@ -820,7 +828,8 @@ async function pollLiveTrades() {
               state.spot,
               strike,
               T,
-              0.05,
+              pricingConfig.riskFreeRate,
+              q,
               midpoint,
               type
             );
@@ -983,7 +992,7 @@ async function pollLiveChainAndCalculate(ticker) {
 
   // clamp：收盘后(>= 16:00)统一用 15:59:50，防止 T=0 导致 GEX 全部归零
   const clampedTimeNowStr = clampTradingTime(timeNowStr);
-  const finalMatrix = store.calculateMatrixGEX(ticker, state.spot, 0.05, todayStr, clampedTimeNowStr);
+  const finalMatrix = store.calculateMatrixGEX(ticker, state.spot, pricingConfig.riskFreeRate, todayStr, clampedTimeNowStr);
   const matrixViews = buildExpiryViews(finalMatrix, todayStr);
   const gexSummary = buildGexSummaries(matrixViews, state.spot);
   state.calculatedMatrix = finalMatrix;

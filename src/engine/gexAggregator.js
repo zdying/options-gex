@@ -4,6 +4,7 @@
  */
 
 const { calculateBSGreeks } = require('../calculator/bsCalculator');
+const pricingConfig = require('../config/pricingConfig');
 
 class GexAggregator {
   constructor(config = {}) {
@@ -11,7 +12,7 @@ class GexAggregator {
     this.wallPctRange = config.wallPctRange !== undefined ? config.wallPctRange : 0.10;
     this.zeroGammaPctRange = config.zeroGammaPctRange !== undefined ? config.zeroGammaPctRange : 0.10;
     this.zeroGammaSteps = config.zeroGammaSteps !== undefined ? config.zeroGammaSteps : 80;
-    this.riskFreeRate = config.riskFreeRate !== undefined ? config.riskFreeRate : 0.05;
+    this.riskFreeRate = config.riskFreeRate !== undefined ? config.riskFreeRate : pricingConfig.riskFreeRate;
   }
 
   buildSummaries(matrixViews, spot) {
@@ -148,7 +149,8 @@ class GexAggregator {
         return sum;
       }
 
-      const greeks = calculateBSGreeks(spot, strike, T, this.riskFreeRate, iv, contract.type, {});
+      const q = this._finite(contract.dividendYield);
+      const greeks = calculateBSGreeks(spot, strike, T, this.riskFreeRate, q, iv, contract.type, {});
       const gex = signedPosition * greeks.gamma * 100 * (spot * spot) * 0.01;
       return sum + this._finite(gex);
     }, 0);

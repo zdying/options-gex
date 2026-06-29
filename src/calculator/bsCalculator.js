@@ -47,12 +47,13 @@ function standardNormalCDF(x) {
  * @param {number} S - 标的正股价格 (Spot)
  * @param {number} K - 行权价 (Strike)
  * @param {number} T - 距离到期时间 (年化，例如 1/365 表示 1 天)
- * @param {number} r - 无风险利率 (年化，例如 0.05)
+ * @param {number} r - 无风险利率 (年化，例如 0.0383)
+ * @param {number} q - 连续股息率 (年化，例如 0.0103)
  * @param {number} sigma - 隐含波动率 (年化，例如 0.20)
  * @param {string} optionType - 期权类型 ('CALL' 或 'PUT')
  * @returns {number} 期权理论价格
  */
-function calculateBSPrice(S, K, T, r, sigma, optionType) {
+function calculateBSPrice(S, K, T, r, q, sigma, optionType) {
   const isCall = optionType.toUpperCase() === 'CALL';
   
   // 边界条件处理
@@ -61,17 +62,21 @@ function calculateBSPrice(S, K, T, r, sigma, optionType) {
   }
   if (sigma <= 0) {
     const discount = Math.exp(-r * T);
-    return isCall ? Math.max(0, S - K * discount) : Math.max(0, K * discount - S);
+    const dividendDiscount = Math.exp(-q * T);
+    return isCall
+      ? Math.max(0, S * dividendDiscount - K * discount)
+      : Math.max(0, K * discount - S * dividendDiscount);
   }
 
-  const d1 = (Math.log(S / K) + (r + (sigma * sigma) / 2.0) * T) / (sigma * Math.sqrt(T));
+  const d1 = (Math.log(S / K) + (r - q + (sigma * sigma) / 2.0) * T) / (sigma * Math.sqrt(T));
   const d2 = d1 - sigma * Math.sqrt(T);
   const discountFactor = Math.exp(-r * T);
+  const dividendDiscountFactor = Math.exp(-q * T);
 
   if (isCall) {
-    return S * standardNormalCDF(d1) - K * discountFactor * standardNormalCDF(d2);
+    return S * dividendDiscountFactor * standardNormalCDF(d1) - K * discountFactor * standardNormalCDF(d2);
   } else {
-    return K * discountFactor * standardNormalCDF(-d2) - S * standardNormalCDF(-d1);
+    return K * discountFactor * standardNormalCDF(-d2) - S * dividendDiscountFactor * standardNormalCDF(-d1);
   }
 }
 
@@ -80,7 +85,8 @@ function calculateBSPrice(S, K, T, r, sigma, optionType) {
  * @param {number} S - 标的正股价格 (Spot)
  * @param {number} K - 行权价 (Strike)
  * @param {number} T - 距离到期时间 (年化)
- * @param {number} r - 无风险利率 (年化，例如 0.05)
+ * @param {number} r - 无风险利率 (年化，例如 0.0383)
+ * @param {number} q - 连续股息率 (年化，例如 0.0103)
  * @param {number} marketPrice - 期权市场价格 (推荐采用买卖中价 Midpoint)
  * @param {string} optionType - 期权类型 ('CALL' 或 'PUT')
  * @param {object} [config] - 迭代参数配置
@@ -89,7 +95,7 @@ function calculateBSPrice(S, K, T, r, sigma, optionType) {
  * @param {number} [config.fallbackIV=0.20] - 求解失败时的回退默认值
  * @returns {number} 反推出的隐含波动率 (IV，小数形式，例如 0.25 代表 25%)
  */
-function calculateImpliedVolatility(S, K, T, r, marketPrice, optionType, config = {}) {
+function calculateImpliedVolatility(S, K, T, r, q, marketPrice, optionType, config = {}) {
   const maxIterations = config.maxIterations || 100;
   const precision = config.precision || 1e-5;
   const fallbackIV = config.fallbackIV !== undefined ? config.fallbackIV : 0.20;
@@ -102,9 +108,10 @@ function calculateImpliedVolatility(S, K, T, r, marketPrice, optionType, config 
   // 2. 检查价格是否低于内在价值 (无解边界情况)
   const isCall = optionType.toUpperCase() === 'CALL';
   const discountFactor = Math.exp(-r * T);
+  const dividendDiscountFactor = Math.exp(-q * T);
   const intrinsicValue = isCall 
-    ? Math.max(0, S - K * discountFactor)
-    : Math.max(0, K * discountFactor - S);
+    ? Math.max(0, S * dividendDiscountFactor - K * discountFactor)
+    : Math.max(0, K * discountFactor - S * dividendDiscountFactor);
 
   // 若市场价格低于等于内在价值，强行返回超低IV，防止死循环
   if (marketPrice <= intrinsicValue + 1e-4) {
@@ -118,7 +125,7 @@ function calculateImpliedVolatility(S, K, T, r, marketPrice, optionType, config 
   // 3. 二分逼近求解
   for (let i = 0; i < maxIterations; i++) {
     midIV = (lowIV + highIV) / 2.0;
-    const price = calculateBSPrice(S, K, T, r, midIV, optionType);
+    const price = calculateBSPrice(S, K, T, r, q, midIV, optionType);
 
     if (Math.abs(price - marketPrice) < precision) {
       return midIV;
@@ -140,14 +147,15 @@ function calculateImpliedVolatility(S, K, T, r, marketPrice, optionType, config 
  * @param {number} S - 标的正股价格 (Spot)
  * @param {number} K - 行权价 (Strike)
  * @param {number} T - 距离到期时间 (年化)
- * @param {number} r - 无风险利率 (年化，例如 0.05)
+ * @param {number} r - 无风险利率 (年化，例如 0.0383)
+ * @param {number} q - 连续股息率 (年化，例如 0.0103)
  * @param {number} sigma - 隐含波动率 (年化，例如 0.20)
  * @param {string} optionType - 期权类型 ('CALL' 或 'PUT')
  * @param {object} [config] - 稳定参数配置
  * @param {number} [config.minVolSqT=0.0002] - 波动乘数下限 (分母保护值，实现与 S 挂钩的动态自适应 Clamping)
  * @returns {object} 希腊字母结果 { delta, gamma, charm, vanna }
  */
-function calculateBSGreeks(S, K, T, r, sigma, optionType, config = {}) {
+function calculateBSGreeks(S, K, T, r, q, sigma, optionType, config = {}) {
   const isCall = optionType.toUpperCase() === 'CALL';
   const minVolSqT = config.minVolSqT !== undefined ? config.minVolSqT : 0.0002;
 
@@ -162,40 +170,33 @@ function calculateBSGreeks(S, K, T, r, sigma, optionType, config = {}) {
   // 2. 计算 d1 与 d2，对分母进行稳定保护 (实现动态 Clamping)
   const sqrtT = Math.sqrt(T);
   const volSqT = Math.max(minVolSqT, sigma * sqrtT);
-  const d1 = (Math.log(S / K) + (r + (sigma * sigma) / 2.0) * T) / volSqT;
-  const d2 = d1 - volSqT;
+  const d1 = (Math.log(S / K) + (r - q + (sigma * sigma) / 2.0) * T) / volSqT;
+  const dividendDiscountFactor = Math.exp(-q * T);
 
   const pdfD1 = standardNormalPDF(d1);
   const cdfD1 = standardNormalCDF(d1);
 
   // 3. 计算 Delta
-  const delta = isCall ? cdfD1 : cdfD1 - 1.0;
+  const delta = isCall
+    ? dividendDiscountFactor * cdfD1
+    : dividendDiscountFactor * (cdfD1 - 1.0);
 
   // 4. 计算 Gamma
-  let gamma = pdfD1 / (S * volSqT);
+  let gamma = dividendDiscountFactor * pdfD1 / (S * volSqT);
 
   // 动态 Clamping: 限制 Gamma 最大值为 15分钟 ATM Gamma 的 5 倍
   // 这能够让尾盘 0DTE 的 Greeks Flare-up 效应自由飙升，但又切掉了最后一两分钟错误报价引起的瞬间飞天
   const safeT = Math.max(15 / (365 * 24 * 60), T); // 限制最低 15 分钟
   const safeVolSqT = Math.max(minVolSqT, sigma * Math.sqrt(safeT));
-  const atmGamma = standardNormalPDF(0) / (S * safeVolSqT);
+  const atmGamma = dividendDiscountFactor * standardNormalPDF(0) / (S * safeVolSqT);
   const gammaLimit = atmGamma * 5.0;
   gamma = Math.min(gamma, gammaLimit);
-
-  // 5. 计算 Charm (Delta 随时间衰减率: dDelta / dt = -dDelta / dT)
-  // 保护 T 避免除 0，并利用已稳定的 volSqT 计算
-  const term1 = d2 / (2.0 * Math.max(1e-6, T));
-  const term2 = r / volSqT;
-  const charm = pdfD1 * (term1 - term2);
-
-  // 6. 计算 Vanna (Delta 随波动率变化率: dDelta / dSigma = dVega / dS)
-  const vanna = -pdfD1 * d2 / Math.max(1e-4, sigma);
 
   return {
     delta,
     gamma,
-    charm,
-    vanna
+    charm: 0,
+    vanna: 0
   };
 }
 
