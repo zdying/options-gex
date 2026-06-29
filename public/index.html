@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dealer Pressure Engine v2.0 - 做市商被迫对冲流分析系统</title>
+  <!-- SEO Meta Tags -->
+  <meta name="description" content="基于做市商被迫对冲流的 0DTE/1DTE 实时量化分析与市场地形地图系统">
+  <!-- Stylesheets -->
+  <link rel="stylesheet" href="css/style.css">
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+
+<body>
+  <div class="app-container">
+
+    <!-- 1. 顶部 Header 区 -->
+    <header class="glass-panel">
+      <div class="brand">
+        <div class="brand-logo"></div>
+        <div>
+          <h1>DEALER PRESSURE ENGINE</h1>
+          <span>v2.0 Beta • 0DTE/1DTE Analyser</span>
+        </div>
+      </div>
+
+      <div class="simulation-clock">
+        <div class="time-progressbar-container">
+          <div id="timeProgressBar" class="time-progressbar"></div>
+        </div>
+        <div>
+          <span class="metric-label" style="font-size: 10px; display: block; text-align: right;">Simulated Time</span>
+          <div id="simClock" class="timer-clock">09:30:00</div>
+        </div>
+      </div>
+    </header>
+
+    <!-- 2. 控制面板 -->
+    <section class="glass-panel control-bar">
+      <div class="selection-group">
+        <span class="metric-label">Ticker:</span>
+        <div class="select-wrapper">
+          <select id="tickerSelect">
+            <option value="AAPL">AAPL (Apple)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="btn-group">
+        <button id="startBtn" class="active-btn">
+          <span style="font-size: 10px;">▶</span> Start Simulation
+        </button>
+        <button id="pauseBtn">
+          <span style="font-size: 10px;">❚❚</span> Pause
+        </button>
+        <button id="resetBtn" class="danger-btn">
+          <span style="font-size: 10px;">↺</span> Reset
+        </button>
+      </div>
+
+      <div class="speed-control">
+        <span class="metric-label">Speed:</span>
+        <div class="select-wrapper">
+          <select id="speedSelect">
+            <option value="1">1x (Real-time)</option>
+            <option value="10">10x Speed</option>
+            <option value="60" selected>60x Speed</option>
+            <option value="300">300x Speed</option>
+            <option value="600">600x Speed</option>
+          </select>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. 四个核心指标看板 -->
+    <section class="metrics-grid">
+      <!-- 股价与 VWAP -->
+      <div class="glass-panel metric-card gold">
+        <span class="metric-label">Spot / VWAP</span>
+        <div class="metric-val" id="spotVal">$0.00</div>
+        <div class="metric-sub">
+          <span>VWAP:</span>
+          <span id="vwapVal" style="color: #fff; font-weight: 600;">$0.00</span>
+          <span id="priceDiffPercent" style="margin-left: auto;">+0.00%</span>
+        </div>
+      </div>
+
+      <!-- 做市商影响力 -->
+      <div class="glass-panel metric-card green" id="influenceCard">
+        <span class="metric-label">Dealer Influence</span>
+        <div class="metric-val" id="influenceVal">100</div>
+        <div class="metric-sub">
+          <span>Regime:</span>
+          <span id="regimeVal" style="color: #fff; font-weight: 600;">Dealer Dominated</span>
+        </div>
+      </div>
+
+      <!-- DPI 指标 -->
+      <div class="glass-panel metric-card cyan">
+        <span class="metric-label">DPI (Dealer Pressure Index)</span>
+        <div class="metric-val" id="dpiVal">0.00</div>
+        <div class="dpi-progress-wrapper">
+          <div class="dpi-track">
+            <div class="dpi-midline"></div>
+            <div id="dpiProgressBar" class="dpi-bar" style="background: var(--accent-cyan);"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 做市商对冲名义金额 -->
+      <div class="glass-panel metric-card rose" id="notionalCard">
+        <span class="metric-label">Dealer Sensitivity (Stress Test Hedge Flow)</span>
+        <div class="metric-val" id="notionalVal">$0.00M</div>
+        <div class="metric-sub">
+          <span>标准压力测试下被迫买卖 (敏感度)</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. 双图表展示区 -->
+    <section class="charts-grid">
+      <!-- GEX 柱状图 -->
+      <div class="glass-panel">
+        <div class="chart-header">
+          <h3 class="chart-title" id="gexChartTitle">GEX Exposure Map</h3>
+          <div class="chart-actions" style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap;">
+            <select id="expiryFilter"
+              style="background: rgba(30, 41, 59, 0.7); color: #fff; border: 1px solid rgba(255, 255, 255, 0.1); padding: 4px 8px; border-radius: 4px; outline: none; font-size: 13px; cursor: pointer;">
+              <option value="all">所有到期日</option>
+              <option value="0dte">仅看 0DTE</option>
+              <option value="weekly">仅看 1DTE-5DTE</option>
+            </select>
+          </div>
+        </div>
+        <div class="chart-wrapper">
+          <canvas id="gexChart"></canvas>
+        </div>
+      </div>
+
+      <!-- 历史对冲名义金额与股价走势图 -->
+      <div class="glass-panel">
+        <div class="chart-header">
+          <h3 class="chart-title">Dealer Notional & Spot Intraday Trend</h3>
+        </div>
+        <div class="chart-wrapper">
+          <canvas id="historyChart"></canvas>
+        </div>
+      </div>
+    </section>
+
+    <!-- 5. 决策解释面板 -->
+    <section class="glass-panel analysis-panel">
+      <div class="analysis-header">
+        <h3 class="analysis-title">
+          <span style="font-size: 16px;">📋</span> Real-time Decision Report
+        </h3>
+        <div id="statusBadge" class="status-badge badge-neutral">NEUTRAL</div>
+      </div>
+      <div id="reportContent" class="report-content">正在载入做市商引擎报告...</div>
+    </section>
+
+  </div>
+
+  <!-- Main Application Script -->
+  <script src="js/app.js"></script>
+</body>
+
+</html>

@@ -1,0 +1,208 @@
+/**
+ * @file bsCalculator.js
+ * @description Black-Scholes 期权定价模型及希腊字母 (Delta, Gamma, Charm, Vanna) 计算引擎。
+ * 包含二分法隐含波动率 (IV) 反推算法，以及针对 0DTE 尾盘非线性飙升的安全限幅 (Clamping) 逻辑。
+ * 无外部依赖，高复用性。
+ */
+
+/**
+ * 标准正态分布的概率密度函数 (PDF)
+ * @param {number} x - 输入数值
+ * @returns {number} 概率密度值
+ */
+function standardNormalPDF(x) {
+  return Math.exp(-x * x / 2.0) / Math.sqrt(2.0 * Math.PI);
+}
+
+/**
+ * 标准正态分布的累积分布函数 (CDF)
+ * 采用 Abramowitz & Stegun (26.2.17) 高精度近似公式，最大误差 < 7.5e-8
+ * @param {number} x - 输入数值
+ * @returns {number} 累积概率值
+ */
+function standardNormalCDF(x) {
+  if (x < 0) {
+    return 1.0 - standardNormalCDF(-x);
+  }
+  const p = 0.2316419;
+  const a1 = 0.319381530;
+  const a2 = -0.356563782;
+  const a3 = 1.781477937;
+  const a4 = -1.821255978;
+  const a5 = 1.330274429;
+  
+  const t = 1.0 / (1.0 + p * x);
+  const pdf = standardNormalPDF(x);
+  return 1.0 - pdf * (
+    a1 * t + 
+    a2 * Math.pow(t, 2) + 
+    a3 * Math.pow(t, 3) + 
+    a4 * Math.pow(t, 4) + 
+    a5 * Math.pow(t, 5)
+  );
+}
+
+/**
+ * 使用 Black-Scholes 公式计算期权理论价格
+ * @param {number} S - 标的正股价格 (Spot)
+ * @param {number} K - 行权价 (Strike)
+ * @param {number} T - 距离到期时间 (年化，例如 1/365 表示 1 天)
+ * @param {number} r - 无风险利率 (年化，例如 0.05)
+ * @param {number} sigma - 隐含波动率 (年化，例如 0.20)
+ * @param {string} optionType - 期权类型 ('CALL' 或 'PUT')
+ * @returns {number} 期权理论价格
+ */
+function calculateBSPrice(S, K, T, r, sigma, optionType) {
+  const isCall = optionType.toUpperCase() === 'CALL';
+  
+  // 边界条件处理
+  if (T <= 0) {
+    return isCall ? Math.max(0, S - K) : Math.max(0, K - S);
+  }
+  if (sigma <= 0) {
+    const discount = Math.exp(-r * T);
+    return isCall ? Math.max(0, S - K * discount) : Math.max(0, K * discount - S);
+  }
+
+  const d1 = (Math.log(S / K) + (r + (sigma * sigma) / 2.0) * T) / (sigma * Math.sqrt(T));
+  const d2 = d1 - sigma * Math.sqrt(T);
+  const discountFactor = Math.exp(-r * T);
+
+  if (isCall) {
+    return S * standardNormalCDF(d1) - K * discountFactor * standardNormalCDF(d2);
+  } else {
+    return K * discountFactor * standardNormalCDF(-d2) - S * standardNormalCDF(-d1);
+  }
+}
+
+/**
+ * 使用二分法 (Bisection Method) 反推期权隐含波动率 (IV)
+ * @param {number} S - 标的正股价格 (Spot)
+ * @param {number} K - 行权价 (Strike)
+ * @param {number} T - 距离到期时间 (年化)
+ * @param {number} r - 无风险利率 (年化，例如 0.05)
+ * @param {number} marketPrice - 期权市场价格 (推荐采用买卖中价 Midpoint)
+ * @param {string} optionType - 期权类型 ('CALL' 或 'PUT')
+ * @param {object} [config] - 迭代参数配置
+ * @param {number} [config.maxIterations=100] - 最大迭代次数
+ * @param {number} [config.precision=1e-5] - 求解精度
+ * @param {number} [config.fallbackIV=0.20] - 求解失败时的回退默认值
+ * @returns {number} 反推出的隐含波动率 (IV，小数形式，例如 0.25 代表 25%)
+ */
+function calculateImpliedVolatility(S, K, T, r, marketPrice, optionType, config = {}) {
+  const maxIterations = config.maxIterations || 100;
+  const precision = config.precision || 1e-5;
+  const fallbackIV = config.fallbackIV !== undefined ? config.fallbackIV : 0.20;
+
+  // 1. 到期或时间异常处理
+  if (T <= 0 || isNaN(T)) {
+    return fallbackIV;
+  }
+
+  // 2. 检查价格是否低于内在价值 (无解边界情况)
+  const isCall = optionType.toUpperCase() === 'CALL';
+  const discountFactor = Math.exp(-r * T);
+  const intrinsicValue = isCall 
+    ? Math.max(0, S - K * discountFactor)
+    : Math.max(0, K * discountFactor - S);
+
+  // 若市场价格低于等于内在价值，强行返回超低IV，防止死循环
+  if (marketPrice <= intrinsicValue + 1e-4) {
+    return 0.0001; 
+  }
+
+  let lowIV = 0.0001;
+  let highIV = 5.0; // 设定 500% 波动率作为合理上限
+  let midIV = fallbackIV;
+
+  // 3. 二分逼近求解
+  for (let i = 0; i < maxIterations; i++) {
+    midIV = (lowIV + highIV) / 2.0;
+    const price = calculateBSPrice(S, K, T, r, midIV, optionType);
+
+    if (Math.abs(price - marketPrice) < precision) {
+      return midIV;
+    }
+
+    if (price < marketPrice) {
+      lowIV = midIV;
+    } else {
+      highIV = midIV;
+    }
+  }
+
+  return midIV;
+}
+
+/**
+ * 计算 Black-Scholes 希腊字母 (Delta, Gamma, Charm, Vanna)
+ * 包含针对 0DTE 尾盘在平值附近计算除零溢出的动态 Clamping 稳定机制
+ * @param {number} S - 标的正股价格 (Spot)
+ * @param {number} K - 行权价 (Strike)
+ * @param {number} T - 距离到期时间 (年化)
+ * @param {number} r - 无风险利率 (年化，例如 0.05)
+ * @param {number} sigma - 隐含波动率 (年化，例如 0.20)
+ * @param {string} optionType - 期权类型 ('CALL' 或 'PUT')
+ * @param {object} [config] - 稳定参数配置
+ * @param {number} [config.minVolSqT=0.0002] - 波动乘数下限 (分母保护值，实现与 S 挂钩的动态自适应 Clamping)
+ * @returns {object} 希腊字母结果 { delta, gamma, charm, vanna }
+ */
+function calculateBSGreeks(S, K, T, r, sigma, optionType, config = {}) {
+  const isCall = optionType.toUpperCase() === 'CALL';
+  const minVolSqT = config.minVolSqT !== undefined ? config.minVolSqT : 0.0002;
+
+  // 1. 到期或时间/波动率异常处理 (放宽阶跃限制，允许尾盘 Greeks Flare-up 效应)
+  if (T <= 0 || isNaN(T) || sigma <= 1e-4) {
+    const delta = isCall 
+      ? (S >= K ? 1.0 : 0.0) 
+      : (S <= K ? -1.0 : 0.0);
+    return { delta, gamma: 0, charm: 0, vanna: 0 };
+  }
+
+  // 2. 计算 d1 与 d2，对分母进行稳定保护 (实现动态 Clamping)
+  const sqrtT = Math.sqrt(T);
+  const volSqT = Math.max(minVolSqT, sigma * sqrtT);
+  const d1 = (Math.log(S / K) + (r + (sigma * sigma) / 2.0) * T) / volSqT;
+  const d2 = d1 - volSqT;
+
+  const pdfD1 = standardNormalPDF(d1);
+  const cdfD1 = standardNormalCDF(d1);
+
+  // 3. 计算 Delta
+  const delta = isCall ? cdfD1 : cdfD1 - 1.0;
+
+  // 4. 计算 Gamma
+  let gamma = pdfD1 / (S * volSqT);
+
+  // 动态 Clamping: 限制 Gamma 最大值为 15分钟 ATM Gamma 的 5 倍
+  // 这能够让尾盘 0DTE 的 Greeks Flare-up 效应自由飙升，但又切掉了最后一两分钟错误报价引起的瞬间飞天
+  const safeT = Math.max(15 / (365 * 24 * 60), T); // 限制最低 15 分钟
+  const safeVolSqT = Math.max(minVolSqT, sigma * Math.sqrt(safeT));
+  const atmGamma = standardNormalPDF(0) / (S * safeVolSqT);
+  const gammaLimit = atmGamma * 5.0;
+  gamma = Math.min(gamma, gammaLimit);
+
+  // 5. 计算 Charm (Delta 随时间衰减率: dDelta / dt = -dDelta / dT)
+  // 保护 T 避免除 0，并利用已稳定的 volSqT 计算
+  const term1 = d2 / (2.0 * Math.max(1e-6, T));
+  const term2 = r / volSqT;
+  const charm = pdfD1 * (term1 - term2);
+
+  // 6. 计算 Vanna (Delta 随波动率变化率: dDelta / dSigma = dVega / dS)
+  const vanna = -pdfD1 * d2 / Math.max(1e-4, sigma);
+
+  return {
+    delta,
+    gamma,
+    charm,
+    vanna
+  };
+}
+
+module.exports = {
+  standardNormalPDF,
+  standardNormalCDF,
+  calculateBSPrice,
+  calculateImpliedVolatility,
+  calculateBSGreeks
+};
