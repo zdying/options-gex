@@ -1,4 +1,5 @@
-const logger = require('../utils/logger')('economicCalendarRegime');
+const logger = require('./utils/logger')('econ');
+const timeUtils = require('./utils/timeUtils');
 
 const BASE_SCORE = 100;
 const HARD_DEDUCTION = 40;
@@ -22,7 +23,8 @@ const SOFT_RULES = [
 
 /** 获取当前美东日期，避免服务器本地时区影响交易日判断。 */
 function getEstDate() {
-  return new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const parts = timeUtils.getEstParts();
+  return new Date(parts.year, parts.month - 1, parts.day);
 }
 
 /** 把 Date 格式化为 YYYY-MM-DD，用于 Finviz 参数和当天事件匹配。 */

@@ -5,7 +5,7 @@ const pricingConfig = {
     QQQ: 0.0040,
     MU: 0.0010
   },
-  minRealtimeTMinutes: 5
+  minRealtimeTMinutes: 1
 };
 
 module.exports = pricingConfig;

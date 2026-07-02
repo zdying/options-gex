@@ -22,9 +22,9 @@ function timeStringToSeconds(timeStr) {
  * @returns {number} 年化剩余时间
  */
 function calculateT(currentDateStr, currentTimeStr, expirationDateStr) {
-  // Bug #14: 指定美东时区 "T00:00:00-04:00" 解决时区歧义
-  const currentDay = new Date(currentDateStr + 'T00:00:00-04:00');
-  const expDay = new Date(expirationDateStr + 'T00:00:00-04:00');
+  // 指定 UTC 时区 "T00:00:00Z" 规避 DST 夏令时漂移与时区歧义
+  const currentDay = new Date(currentDateStr + 'T00:00:00Z');
+  const expDay = new Date(expirationDateStr + 'T00:00:00Z');
   const diffDays = Math.round((expDay - currentDay) / (1000 * 60 * 60 * 24));
 
   const currentSeconds = timeStringToSeconds(currentTimeStr);
@@ -43,8 +43,8 @@ function calculateT(currentDateStr, currentTimeStr, expirationDateStr) {
  * @returns {number} 年化剩余时间
  */
 function calculateDayT(currentDateStr, expirationDateStr) {
-  const currentDay = new Date(currentDateStr + 'T00:00:00-04:00');
-  const expDay = new Date(expirationDateStr + 'T00:00:00-04:00');
+  const currentDay = new Date(currentDateStr + 'T00:00:00Z');
+  const expDay = new Date(expirationDateStr + 'T00:00:00Z');
   const diffDays = Math.round((expDay - currentDay) / (1000 * 60 * 60 * 24));
   return Math.max(1, diffDays) / 365.0;
 }

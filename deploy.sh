@@ -63,12 +63,12 @@ ssh "${SSH_ARGS[@]}" "${REMOTE_HOST}" "bash -lc '
 
   # 使用 PM2 启动或重启服务
   if pm2 describe \"${PM2_APP_NAME}\" >/dev/null 2>&1; then
-    echo \"[deploy] PM2 process exists. Reloading with updated environments...\"
-    NODE_ENV=\"${NODE_ENV}\" PORT=\"${PORT}\" pm2 restart \"${PM2_APP_NAME}\" --update-env
+    echo \"[deploy] PM2 process exists. Recreating process with current entrypoint...\"
+    pm2 delete \"${PM2_APP_NAME}\"
   else
     echo \"[deploy] Starting new PM2 process...\"
-    NODE_ENV=\"${NODE_ENV}\" PORT=\"${PORT}\" pm2 start src/app.js --name \"${PM2_APP_NAME}\"
   fi
+  NODE_ENV=\"${NODE_ENV}\" PORT=\"${PORT}\" pm2 start src/app.js --name \"${PM2_APP_NAME}\"
   pm2 save
 '"
 

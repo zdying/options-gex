@@ -1,17 +1,20 @@
 const fs = require('fs');
-const path = require('path');
-const engine = require('../engine');
-const gravityPresenter = require('../presenter/gravityPresenter');
+const gexService = require('../gexService');
+const marketScheduler = require('../marketScheduler');
+const gravityPresenter = require('../gravityPresenter');
+const paths = require('../paths');
+const { BUILTIN_TICKERS } = require('../tickerConfig');
+const timeUtils = require('../utils/timeUtils');
 const logger = require('../utils/logger')('routes');
 
 function getTickerState(ticker) {
-  const defaultTicker = engine.BUILTIN_TICKERS[0] || 'SPY';
+  const defaultTicker = BUILTIN_TICKERS[0] || 'SPY';
   ticker = (ticker || defaultTicker).toUpperCase();
-  let state = engine.tickerStates[ticker];
-  if (!state) state = engine.tickerStates[defaultTicker];
+  let state = gexService.tickerStates[ticker];
+  if (!state) state = gexService.tickerStates[defaultTicker];
   if (!state) {
-    const keys = Object.keys(engine.tickerStates);
-    if (keys.length > 0) state = engine.tickerStates[keys[0]];
+    const keys = Object.keys(gexService.tickerStates);
+    if (keys.length > 0) state = gexService.tickerStates[keys[0]];
   }
   return state;
 }
@@ -27,7 +30,7 @@ function safeReadJson(filePath, fallback = null) {
 }
 
 function getLatestTradeDateWithData(ticker) {
-  const liveDataRoot = path.join(__dirname, '../../data/live_data');
+  const liveDataRoot = paths.LIVE_DATA_ROOT;
   if (!fs.existsSync(liveDataRoot)) return null;
 
   try {
@@ -36,9 +39,7 @@ function getLatestTradeDateWithData(ticker) {
       .sort((a, b) => b.localeCompare(a));
 
     for (const dateStr of dates) {
-      const tickerDir = path.join(liveDataRoot, dateStr, ticker);
-      const openChainPath = path.join(tickerDir, 'optionchains_open.json');
-      if (fs.existsSync(openChainPath)) return dateStr;
+      if (fs.existsSync(paths.openChainPath(dateStr, ticker))) return dateStr;
     }
   } catch (e) {
     logger.error(`[GEX API] Error finding latest trade date for ${ticker}:`, e);
@@ -50,8 +51,7 @@ function getLatestHistoryForTicker(ticker) {
   const latestDateStr = getLatestTradeDateWithData(ticker);
   if (!latestDateStr) return { date: null, history: [] };
 
-  const historyPath = path.join(__dirname, '../../data/live_data', latestDateStr, ticker, 'history.json');
-  const history = safeReadJson(historyPath, []);
+  const history = safeReadJson(paths.historyPath(latestDateStr, ticker), []);
   return {
     date: latestDateStr,
     history: Array.isArray(history) ? history : []
@@ -62,16 +62,15 @@ function getLatestTradesCountForTicker(ticker) {
   const latestDateStr = getLatestTradeDateWithData(ticker);
   if (!latestDateStr) return 0;
 
-  const tradesPath = path.join(__dirname, '../../data/live_data', latestDateStr, ticker, 'trades.json');
-  const trades = safeReadJson(tradesPath, []);
+  const trades = safeReadJson(paths.tradesPath(latestDateStr, ticker), []);
   return Array.isArray(trades) ? trades.length : 0;
 }
 
 async function getClientGravityState(ticker) {
-  const defaultTicker = engine.BUILTIN_TICKERS[0] || 'SPY';
+  const defaultTicker = BUILTIN_TICKERS[0] || 'SPY';
   ticker = (ticker || defaultTicker).toUpperCase();
   const state = getTickerState(ticker);
-  const gravityReference = await engine.getCurrentRegime();
+  const gravityReference = await marketScheduler.getCurrentRegime();
 
   if (!state) {
     return gravityPresenter.statePayload({ ticker, gravityReference }, ticker);
@@ -80,7 +79,7 @@ async function getClientGravityState(ticker) {
   return gravityPresenter.statePayload({
     ticker: state.ticker,
     isRunning: state.isRunning,
-    currentTime: engine.secondsToTimeString(state.currentTimeSeconds),
+    currentTime: timeUtils.formatTime(state.currentTimeSeconds),
     currentTimePct: ((state.currentTimeSeconds - 9.5 * 3600) / (6.5 * 3600)) * 100,
     spot: state.spot,
     latestMetrics: state.latestGex,

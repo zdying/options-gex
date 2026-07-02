@@ -9,6 +9,7 @@ let replayHistory = [];
 let replayIndex = 0;
 let replayTimer = null;
 let replaySpeed = 60; // 默认 60 倍速
+let tooltipDismissTimer = null;
 
 function formatCompactNumber(value) {
   const num = Number(value);
@@ -94,7 +95,7 @@ const verticalLinePlugin = {
     lines.forEach(line => {
       if (line.value === null || line.value === undefined) return;
       const xPos = x.getPixelForValue(line.value);
-      
+
       // 检查像素坐标是否越界
       if (isNaN(xPos) || xPos < chart.chartArea.left || xPos > chart.chartArea.right) return;
 
@@ -104,12 +105,12 @@ const verticalLinePlugin = {
       if (line.dash) {
         ctx.setLineDash(line.dash);
       }
-      
+
       ctx.beginPath();
       ctx.moveTo(xPos, top);
       ctx.lineTo(xPos, bottom);
       ctx.stroke();
-      
+
       // 绘制标签文本
       ctx.fillStyle = line.color || '#fff';
       ctx.font = 'bold 9px "Inter", sans-serif';
@@ -121,6 +122,29 @@ const verticalLinePlugin = {
 
 function isMobileChartLayout(chart) {
   return chart && chart.width <= 640;
+}
+
+function getGravityLiveLineWidth(chart) {
+  return isMobileChartLayout(chart) ? 2.5 : 3;
+}
+
+function getDisplayGravityMap(map, chart) {
+  const strikes = Array.isArray(map && map.strikes) ? map.strikes : [];
+  const liveGravityCurve = Array.isArray(map && map.liveGravityCurve) ? map.liveGravityCurve : [];
+  const openingGravityCurve = Array.isArray(map && map.openingGravityCurve) ? map.openingGravityCurve : [];
+
+  if (!isMobileChartLayout(chart) || strikes.length <= 30) {
+    return { strikes, liveGravityCurve, openingGravityCurve };
+  }
+
+  const excess = strikes.length - 30;
+  const start = Math.floor(excess / 2);
+  const end = strikes.length - Math.ceil(excess / 2);
+  return {
+    strikes: strikes.slice(start, end),
+    liveGravityCurve: liveGravityCurve.slice(start, end),
+    openingGravityCurve: openingGravityCurve.slice(start, end)
+  };
 }
 
 const mobileYAxisLabelsPlugin = {
@@ -137,7 +161,7 @@ const mobileYAxisLabelsPlugin = {
 
     y.ticks.display = true;
     y.ticks.mirror = mobile;
-    y.ticks.padding = mobile ? 6 : 3;
+    y.ticks.padding = mobile ? 1 : 3;
     y.title.display = !mobile;
     y.afterFit = scale => {
       if (isMobileChartLayout(chart)) scale.width = 8;
@@ -147,7 +171,7 @@ const mobileYAxisLabelsPlugin = {
 
     yGlobal.ticks.display = true;
     yGlobal.ticks.mirror = mobile;
-    yGlobal.ticks.padding = mobile ? 6 : 3;
+    yGlobal.ticks.padding = mobile ? 1 : 3;
     yGlobal.title.display = !mobile;
     yGlobal.afterFit = scale => {
       if (isMobileChartLayout(chart)) scale.width = 8;
@@ -247,6 +271,7 @@ document.addEventListener('DOMContentLoaded', () => {
         tickerSelect.value = 'QQQ';
       }
       initCharts();
+      bindMobileTooltipDismissal();
       pollState();
     })
     .catch(err => {
@@ -396,18 +421,19 @@ function renderReplayFrame() {
   updateGravityChartTitle(tickerSelect.value, range, point.date, point.time);
 
   if (gravityMap && gravityChart) {
+    const displayMap = getDisplayGravityMap(gravityMap, gravityChart);
     const smoothData = smoothGravityData(
-      gravityMap.strikes,
-      gravityMap.liveGravityCurve,
-      gravityMap.openingGravityCurve
+      displayMap.strikes,
+      displayMap.liveGravityCurve,
+      displayMap.openingGravityCurve
     );
     gravityChart.$rawGravityData = {
-      strikes: gravityMap.strikes || [],
-      liveGravityCurve: gravityMap.liveGravityCurve || [],
-      openingGravityCurve: gravityMap.openingGravityCurve || []
+      strikes: displayMap.strikes,
+      liveGravityCurve: displayMap.liveGravityCurve,
+      openingGravityCurve: displayMap.openingGravityCurve
     };
     gravityChart.data.labels = [];
-    
+
     // Dataset 0: 实时引力
     gravityChart.data.datasets[0].data = smoothData.liveGravityCurve;
     gravityChart.data.datasets[0].pointBackgroundColor = smoothData.liveGravityCurve.map(() => 'rgba(255, 42, 95, 1)');
@@ -501,7 +527,7 @@ function updateGravityChartTitle(ticker, range, date, time) {
   const parts = [
     ticker ? ticker.toUpperCase() : '',
     // '引力分布图',
-    getRangeLabel(range),
+    // getRangeLabel(range),
     [date, time].filter(Boolean).join(' ')
   ].filter(Boolean);
 
@@ -522,6 +548,53 @@ function findNearestRawGravityIndex(xValue) {
     }
   }
   return nearestIdx;
+}
+
+function hideChartTooltips() {
+  if (tooltipDismissTimer) {
+    clearTimeout(tooltipDismissTimer);
+    tooltipDismissTimer = null;
+  }
+  [gravityChart, historyChart].forEach(chart => {
+    if (!chart) return;
+    chart.setActiveElements([]);
+    if (chart.tooltip) {
+      chart.tooltip.setActiveElements([], { x: 0, y: 0 });
+    }
+    chart.update('none');
+  });
+}
+
+function scheduleChartTooltipDismissal() {
+  if (!window.matchMedia('(max-width: 640px)').matches) return;
+  if (tooltipDismissTimer) clearTimeout(tooltipDismissTimer);
+  tooltipDismissTimer = setTimeout(hideChartTooltips, 2500);
+}
+
+function bindMobileTooltipDismissal() {
+  document.addEventListener('pointerdown', event => {
+    if (!window.matchMedia('(max-width: 640px)').matches) return;
+    if (event.target === gravityChart?.canvas || event.target === historyChart?.canvas) return;
+    hideChartTooltips();
+  }, { capture: true });
+
+  window.addEventListener('scroll', () => {
+    if (window.matchMedia('(max-width: 640px)').matches) {
+      hideChartTooltips();
+    }
+  }, { passive: true });
+
+  window.addEventListener('touchmove', () => {
+    if (window.matchMedia('(max-width: 640px)').matches) {
+      hideChartTooltips();
+    }
+  }, { passive: true });
+
+  [gravityChart, historyChart].forEach(chart => {
+    if (!chart) return;
+    chart.canvas.addEventListener('pointerup', scheduleChartTooltipDismissal, { passive: true });
+    chart.canvas.addEventListener('touchend', scheduleChartTooltipDismissal, { passive: true });
+  });
 }
 
 // ==========================================
@@ -593,7 +666,7 @@ function initCharts() {
           data: [],
           yAxisID: 'y',
           borderColor: 'rgba(255, 42, 95, 1)',
-          borderWidth: 3,
+          borderWidth: context => getGravityLiveLineWidth(context.chart),
           tension: 0,
           borderCapStyle: 'round',
           borderJoinStyle: 'round',
@@ -695,7 +768,7 @@ function initCharts() {
       },
       plugins: {
         legend: {
-          display: true,
+          display: false,
           position: 'top',
           labels: {
             color: '#9ca3af',
@@ -705,7 +778,7 @@ function initCharts() {
         tooltip: {
           enabled: true,
           callbacks: {
-            title: function(context) {
+            title: function (context) {
               const nearestIdx = findNearestRawGravityIndex(context[0].parsed.x);
               const raw = gravityChart && gravityChart.$rawGravityData;
               if (nearestIdx >= 0 && raw) {
@@ -713,7 +786,7 @@ function initCharts() {
               }
               return `Price: $${context[0].parsed.x.toFixed(2)}`;
             },
-            label: function(context) {
+            label: function (context) {
               const datasetLabel = context.dataset.label || '';
               const nearestIdx = findNearestRawGravityIndex(context.parsed.x);
               const raw = gravityChart && gravityChart.$rawGravityData;
@@ -815,24 +888,25 @@ function updateCharts() {
 
   const ticker = tickerSelect.value;
   const range = document.getElementById('rangeFilter').value;
-  
+
   fetch(`/api/gravity-map?ticker=${ticker}&range=${range}`)
     .then(res => res.json())
     .then(data => {
       if (!gravityChart) return;
 
+      const displayMap = getDisplayGravityMap(data, gravityChart);
       const smoothData = smoothGravityData(
-        data.strikes,
-        data.liveGravityCurve,
-        data.openingGravityCurve
+        displayMap.strikes,
+        displayMap.liveGravityCurve,
+        displayMap.openingGravityCurve
       );
       gravityChart.$rawGravityData = {
-        strikes: data.strikes || [],
-        liveGravityCurve: data.liveGravityCurve || [],
-        openingGravityCurve: data.openingGravityCurve || []
+        strikes: displayMap.strikes,
+        liveGravityCurve: displayMap.liveGravityCurve,
+        openingGravityCurve: displayMap.openingGravityCurve
       };
       gravityChart.data.labels = [];
-      
+
       // Dataset 0: 实时引力
       gravityChart.data.datasets[0].data = smoothData.liveGravityCurve;
       gravityChart.data.datasets[0].pointBackgroundColor = smoothData.liveGravityCurve.map(() => 'rgba(255, 42, 95, 1)');
@@ -922,7 +996,7 @@ function showErrorToast(message) {
   }
   toast.textContent = message;
   toast.style.opacity = '1';
-  
+
   if (window.errorToastTimeout) clearTimeout(window.errorToastTimeout);
   window.errorToastTimeout = setTimeout(() => {
     toast.style.opacity = '0';

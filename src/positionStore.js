@@ -5,9 +5,9 @@
  * 以及盘中根据交易流水修正模型持仓增量，避免高频读写冲突。
  */
 
-const { calculateBSGreeks, calculateImpliedVolatility } = require('../calculator/bsCalculator');
-const { calculateT, calculateDayT, determineTradeDirection } = require('../utils/sharedUtils');
-const pricingConfig = require('../config/pricingConfig');
+const { calculateBSGreeks, calculateImpliedVolatility } = require('./bsCalculator');
+const { calculateT, calculateDayT, determineTradeDirection } = require('./utils/sharedUtils');
+const pricingConfig = require('./pricingConfig');
 
 class PositionStore {
   constructor(config = {}) {
@@ -53,8 +53,8 @@ class PositionStore {
       
       // 过滤到期日，最多两个星期内（14天）
       // Bug #14: 显式指定美东时区防止时区歧义
-      const expDate = new Date(expirationDateStr + 'T00:00:00-04:00');
-      const curDate = new Date(currentDateStr + 'T00:00:00-04:00');
+      const expDate = new Date(expirationDateStr + 'T00:00:00Z');
+      const curDate = new Date(currentDateStr + 'T00:00:00Z');
       const diffDays = Math.round((expDate - curDate) / (1000 * 60 * 60 * 24));
       if (diffDays < 0 || diffDays > 14) {
         return; // 跳过
@@ -90,8 +90,8 @@ class PositionStore {
     const expirationStr = trade.date_expiration;
     if (expirationStr) {
       // Bug #14: 显式指定美东时区防止时区歧义
-      const expDate = new Date(expirationStr + 'T00:00:00-04:00');
-      const curDate = new Date(currentDateStr + 'T00:00:00-04:00');
+      const expDate = new Date(expirationStr + 'T00:00:00Z');
+      const curDate = new Date(currentDateStr + 'T00:00:00Z');
       const diffDays = Math.round((expDate - curDate) / (1000 * 60 * 60 * 24));
       if (diffDays < 0 || diffDays > 14) {
         return false; // 过滤不处理
@@ -107,11 +107,17 @@ class PositionStore {
     if (!this.store[uppercaseTicker][symbol]) {
       const oi = parseInt(trade.open_interest, 10) || 0;
       const type = trade.put_call.toUpperCase();
+      const bid = parseFloat(trade.bid);
+      const ask = parseFloat(trade.ask);
+      const midpoint = parseFloat(trade.midpoint);
       this.store[uppercaseTicker][symbol] = {
         symbol: symbol,
         strike: parseFloat(trade.strike_price),
         type: type,
         expiration: trade.date_expiration,
+        bid: Number.isFinite(bid) ? bid : 0,
+        ask: Number.isFinite(ask) ? ask : 0,
+        midpoint: Number.isFinite(midpoint) ? midpoint : undefined,
         openingOI: oi,
         flowPositionDelta: 0,
         ivRealtime: undefined,
@@ -158,7 +164,7 @@ class PositionStore {
    * @returns {Array<object>} 计算完 Greeks 和 GEX 后的合约列表
    */
   calculateMatrixGEX(ticker, spot, r, currentDateStr, currentTimeStr = "09:30:00", expiryFilter = "all", greeksConfig = {}) {
-    if (!spot) {
+    if (!Number.isFinite(spot) || spot <= 0) {
       return [];
     }
     const uppercaseTicker = ticker.toUpperCase();
@@ -169,8 +175,8 @@ class PositionStore {
     return matrix.map(contract => {
       // 过滤逻辑
       // Bug #14: 显式指定美东时区防止时区歧义
-      const expDate = new Date(contract.expiration + 'T00:00:00-04:00');
-      const curDate = new Date(currentDateStr + 'T00:00:00-04:00');
+      const expDate = new Date(contract.expiration + 'T00:00:00Z');
+      const curDate = new Date(currentDateStr + 'T00:00:00Z');
       const diffDays = Math.round((expDate - curDate) / (1000 * 60 * 60 * 24));
 
       // 物理裁剪：最多只保留两星期内（14天）的期权合约
@@ -193,7 +199,15 @@ class PositionStore {
         calculateT(currentDateStr, currentTimeStr, contract.expiration)
       );
 
-      const marketPrice = contract.midpoint || ((contract.bid + contract.ask) / 2.0) || 0.1;
+      const midpoint = Number(contract.midpoint);
+      const bid = Number(contract.bid);
+      const ask = Number(contract.ask);
+      const quotedMid = Number.isFinite(bid) && Number.isFinite(ask) && bid > 0 && ask > 0
+        ? (bid + ask) / 2.0
+        : NaN;
+      const marketPrice = Number.isFinite(midpoint) && midpoint > 0
+        ? midpoint
+        : (Number.isFinite(quotedMid) && quotedMid > 0 ? quotedMid : 0.1);
 
       // 动态反推实时 IV：使用分钟级 T，供实时 GEX 使用
       let ivRealtime = contract.ivRealtime;

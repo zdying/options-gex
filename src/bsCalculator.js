@@ -54,24 +54,30 @@ function standardNormalCDF(x) {
  * @returns {number} 期权理论价格
  */
 function calculateBSPrice(S, K, T, r, q, sigma, optionType) {
-  const isCall = optionType.toUpperCase() === 'CALL';
+  const isCall = String(optionType || '').toUpperCase() === 'CALL';
+  const effectiveR = Number.isFinite(r) ? r : 0;
+  const effectiveQ = Number.isFinite(q) ? q : 0;
+
+  if (!Number.isFinite(S) || S <= 0 || !Number.isFinite(K) || K <= 0) {
+    return 0;
+  }
   
   // 边界条件处理
-  if (T <= 0) {
+  if (!Number.isFinite(T) || T <= 0) {
     return isCall ? Math.max(0, S - K) : Math.max(0, K - S);
   }
-  if (sigma <= 0) {
-    const discount = Math.exp(-r * T);
-    const dividendDiscount = Math.exp(-q * T);
+  if (!Number.isFinite(sigma) || sigma <= 0) {
+    const discount = Math.exp(-effectiveR * T);
+    const dividendDiscount = Math.exp(-effectiveQ * T);
     return isCall
       ? Math.max(0, S * dividendDiscount - K * discount)
       : Math.max(0, K * discount - S * dividendDiscount);
   }
 
-  const d1 = (Math.log(S / K) + (r - q + (sigma * sigma) / 2.0) * T) / (sigma * Math.sqrt(T));
+  const d1 = (Math.log(S / K) + (effectiveR - effectiveQ + (sigma * sigma) / 2.0) * T) / (sigma * Math.sqrt(T));
   const d2 = d1 - sigma * Math.sqrt(T);
-  const discountFactor = Math.exp(-r * T);
-  const dividendDiscountFactor = Math.exp(-q * T);
+  const discountFactor = Math.exp(-effectiveR * T);
+  const dividendDiscountFactor = Math.exp(-effectiveQ * T);
 
   if (isCall) {
     return S * dividendDiscountFactor * standardNormalCDF(d1) - K * discountFactor * standardNormalCDF(d2);
@@ -99,16 +105,26 @@ function calculateImpliedVolatility(S, K, T, r, q, marketPrice, optionType, conf
   const maxIterations = config.maxIterations || 100;
   const precision = config.precision || 1e-5;
   const fallbackIV = config.fallbackIV !== undefined ? config.fallbackIV : 0.20;
+  const effectiveR = Number.isFinite(r) ? r : 0;
+  const effectiveQ = Number.isFinite(q) ? q : 0;
+
+  if (
+    !Number.isFinite(S) || S <= 0 ||
+    !Number.isFinite(K) || K <= 0 ||
+    !Number.isFinite(marketPrice) || marketPrice <= 0
+  ) {
+    return fallbackIV;
+  }
 
   // 1. 到期或时间异常处理
-  if (T <= 0 || isNaN(T)) {
+  if (!Number.isFinite(T) || T <= 0) {
     return fallbackIV;
   }
 
   // 2. 检查价格是否低于内在价值 (无解边界情况)
-  const isCall = optionType.toUpperCase() === 'CALL';
-  const discountFactor = Math.exp(-r * T);
-  const dividendDiscountFactor = Math.exp(-q * T);
+  const isCall = String(optionType || '').toUpperCase() === 'CALL';
+  const discountFactor = Math.exp(-effectiveR * T);
+  const dividendDiscountFactor = Math.exp(-effectiveQ * T);
   const intrinsicValue = isCall 
     ? Math.max(0, S * dividendDiscountFactor - K * discountFactor)
     : Math.max(0, K * discountFactor - S * dividendDiscountFactor);
@@ -125,7 +141,7 @@ function calculateImpliedVolatility(S, K, T, r, q, marketPrice, optionType, conf
   // 3. 二分逼近求解
   for (let i = 0; i < maxIterations; i++) {
     midIV = (lowIV + highIV) / 2.0;
-    const price = calculateBSPrice(S, K, T, r, q, midIV, optionType);
+    const price = calculateBSPrice(S, K, T, effectiveR, effectiveQ, midIV, optionType);
 
     if (Math.abs(price - marketPrice) < precision) {
       return midIV;
@@ -156,11 +172,17 @@ function calculateImpliedVolatility(S, K, T, r, q, marketPrice, optionType, conf
  * @returns {object} 希腊字母结果 { delta, gamma, charm, vanna }
  */
 function calculateBSGreeks(S, K, T, r, q, sigma, optionType, config = {}) {
-  const isCall = optionType.toUpperCase() === 'CALL';
+  const isCall = String(optionType || '').toUpperCase() === 'CALL';
   const minVolSqT = config.minVolSqT !== undefined ? config.minVolSqT : 0.0002;
+  const effectiveR = Number.isFinite(r) ? r : 0;
+  const effectiveQ = Number.isFinite(q) ? q : 0;
+
+  if (!Number.isFinite(S) || S <= 0 || !Number.isFinite(K) || K <= 0) {
+    return { delta: 0, gamma: 0, charm: 0, vanna: 0 };
+  }
 
   // 1. 到期或时间/波动率异常处理 (放宽阶跃限制，允许尾盘 Greeks Flare-up 效应)
-  if (T <= 0 || isNaN(T) || sigma <= 1e-4) {
+  if (!Number.isFinite(T) || T <= 0 || !Number.isFinite(sigma) || sigma <= 1e-4) {
     const delta = isCall 
       ? (S >= K ? 1.0 : 0.0) 
       : (S <= K ? -1.0 : 0.0);
@@ -170,8 +192,8 @@ function calculateBSGreeks(S, K, T, r, q, sigma, optionType, config = {}) {
   // 2. 计算 d1 与 d2，对分母进行稳定保护 (实现动态 Clamping)
   const sqrtT = Math.sqrt(T);
   const volSqT = Math.max(minVolSqT, sigma * sqrtT);
-  const d1 = (Math.log(S / K) + (r - q + (sigma * sigma) / 2.0) * T) / volSqT;
-  const dividendDiscountFactor = Math.exp(-q * T);
+  const d1 = (Math.log(S / K) + (effectiveR - effectiveQ + (sigma * sigma) / 2.0) * T) / volSqT;
+  const dividendDiscountFactor = Math.exp(-effectiveQ * T);
 
   const pdfD1 = standardNormalPDF(d1);
   const cdfD1 = standardNormalCDF(d1);

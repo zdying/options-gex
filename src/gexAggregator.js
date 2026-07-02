@@ -3,8 +3,8 @@
  * @description Opening OI 与 flow-adjusted realtime GEX 聚合、墙位和 Zero Gamma 计算。
  */
 
-const { calculateBSGreeks } = require('../calculator/bsCalculator');
-const pricingConfig = require('../config/pricingConfig');
+const { calculateBSGreeks } = require('./bsCalculator');
+const pricingConfig = require('./pricingConfig');
 
 class GexAggregator {
   constructor(config = {}) {
