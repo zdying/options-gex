@@ -1,5 +1,5 @@
 // 全局图表实例
-let gexChart = null;
+let gravityChart = null;
 let historyChart = null;
 let updateInterval = null;
 
@@ -34,7 +34,7 @@ function formatCompactNumber(value) {
   return `${sign}${scaled.toFixed(decimals).replace(/\.?0+$/, '')}${unit.suffix}`;
 }
 
-function formatGex(value) {
+function formatGravity(value) {
   const num = Number(value);
   if (!Number.isFinite(num)) return '$0';
   return `${num < 0 ? '-' : ''}$${formatCompactNumber(Math.abs(num))}`;
@@ -45,23 +45,39 @@ function formatWall(value) {
   return Number.isFinite(num) ? `$${num.toFixed(num >= 100 ? 0 : 2)}` : '--';
 }
 
-function getPointGexMetrics(point, expiry) {
-  const scopedGex = point && point.gexData ? point.gexData[expiry] : null;
-  const source = scopedGex || {};
-  const globalTotalGex = Number(source.globalTotalGex) || 0;
-  const realtimeTotalGex = Number(source.realtimeTotalGex) || 0;
-  const sourceGexChange = Number(source.gexChange);
+function getReferenceCardClass(score) {
+  if (score >= 80) return 'glass-panel metric-card green';
+  if (score >= 50) return 'glass-panel metric-card gold';
+  return 'glass-panel metric-card rose';
+}
+
+function updateReferenceCard(reference) {
+  const score = Number(reference && reference.score);
+  gravityReferenceVal.textContent = Number.isFinite(score) ? `${Math.round(score)}` : '--';
+  gravityReferenceNote.textContent = reference && reference.message
+    ? reference.message
+    : '引力位不是预测目标，而是需要重点观察的关键价格。';
+  referenceCard.className = Number.isFinite(score)
+    ? getReferenceCardClass(score)
+    : 'glass-panel metric-card gold';
+}
+
+function getPointGravityMetrics(point) {
+  const source = point && point.gravityMap ? point.gravityMap : (point || {});
+  const openingGravity = Number(source.openingGravity) || 0;
+  const liveGravity = Number(source.liveGravity) || 0;
+  const sourceGravityShift = Number(source.gravityShift);
 
   return {
-    globalTotalGex,
-    realtimeTotalGex,
-    gexChange: Number.isFinite(sourceGexChange) ? sourceGexChange : realtimeTotalGex - globalTotalGex,
-    globalCallWall: source.globalCallWall,
-    globalPutWall: source.globalPutWall,
-    globalZeroGamma: source.globalZeroGamma,
-    realtimeCallWall: source.realtimeCallWall,
-    realtimePutWall: source.realtimePutWall,
-    realtimeZeroGamma: source.realtimeZeroGamma
+    openingGravity,
+    liveGravity,
+    gravityShift: Number.isFinite(sourceGravityShift) ? sourceGravityShift : liveGravity - openingGravity,
+    openingUpperGravity: source.openingUpperGravity,
+    openingLowerGravity: source.openingLowerGravity,
+    openingGravityAxis: source.openingGravityAxis,
+    upperGravity: source.upperGravity,
+    lowerGravity: source.lowerGravity,
+    gravityAxis: source.gravityAxis
   };
 }
 
@@ -110,11 +126,11 @@ function isMobileChartLayout(chart) {
 const mobileYAxisLabelsPlugin = {
   id: 'mobileYAxisLabelsPlugin',
   beforeUpdate: (chart) => {
-    if (!chart.canvas || !['gexChart', 'historyChart'].includes(chart.canvas.id)) return;
+    if (!chart.canvas || !['gravityChart', 'historyChart'].includes(chart.canvas.id)) return;
 
     const mobile = isMobileChartLayout(chart);
-    const leftAxisId = chart.canvas.id === 'gexChart' ? 'y' : 'yNotional';
-    const rightAxisId = chart.canvas.id === 'gexChart' ? 'yGlobal' : 'yChange';
+    const leftAxisId = chart.canvas.id === 'gravityChart' ? 'y' : 'yNotional';
+    const rightAxisId = chart.canvas.id === 'gravityChart' ? 'yGlobal' : 'yChange';
     const y = chart.options.scales[leftAxisId];
     const yGlobal = chart.options.scales[rightAxisId];
     if (!y) return;
@@ -142,7 +158,7 @@ const mobileYAxisLabelsPlugin = {
 const topAxisGridPlugin = {
   id: 'topAxisGridPlugin',
   afterDatasetsDraw: (chart) => {
-    if (!chart.canvas || chart.canvas.id !== 'gexChart') return;
+    if (!chart.canvas || chart.canvas.id !== 'gravityChart') return;
 
     const { ctx, chartArea, scales } = chart;
     const x = scales.x;
@@ -185,15 +201,18 @@ const simClock = document.getElementById('simClock');
 const timeProgressBar = document.getElementById('timeProgressBar');
 
 const spotVal = document.getElementById('spotVal');
-const gexChangeVal = document.getElementById('gexChangeVal');
+const gravityShiftVal = document.getElementById('gravityShiftVal');
+const gravityReferenceVal = document.getElementById('gravityReferenceVal');
+const gravityReferenceNote = document.getElementById('gravityReferenceNote');
+const referenceCard = document.getElementById('referenceCard');
 
-const globalGexVal = document.getElementById('globalGexVal');
+const openingGravityVal = document.getElementById('openingGravityVal');
 const influenceCard = document.getElementById('influenceCard');
 
-const realtimeGexVal = document.getElementById('realtimeGexVal');
+const liveGravityVal = document.getElementById('liveGravityVal');
 
 const wallsVal = document.getElementById('wallsVal');
-const zeroGammaVal = document.getElementById('zeroGammaVal');
+const gravityAxisVal = document.getElementById('gravityAxisVal');
 const wallsCard = document.getElementById('wallsCard');
 
 const statusBadge = document.getElementById('statusBadge');
@@ -211,7 +230,7 @@ document.addEventListener('DOMContentLoaded', () => {
       tickers.forEach(t => {
         const option = document.createElement('option');
         option.value = t.name;
-        option.textContent = `${t.name} (${t.count} alerts)`;
+        option.textContent = `${t.name} (${t.count} signals)`;
         tickerSelect.appendChild(option);
       });
       // 获取 URL 参数中的 ticker，若没有则默认选择 QQQ
@@ -245,13 +264,13 @@ document.addEventListener('DOMContentLoaded', () => {
   tickerSelect.addEventListener('change', () => {
     exitReplay();
     resetCharts();
-    updateGexChartTitle(tickerSelect.value, document.getElementById('expiryFilter').value, '', '');
+    updateGravityChartTitle(tickerSelect.value, document.getElementById('rangeFilter').value, '', '');
     pollState();
   });
 
-  const expiryFilter = document.getElementById('expiryFilter');
-  expiryFilter.addEventListener('change', () => {
-    updateGexChartTitle(tickerSelect.value, expiryFilter.value, '', '');
+  const rangeFilter = document.getElementById('rangeFilter');
+  rangeFilter.addEventListener('change', () => {
+    updateGravityChartTitle(tickerSelect.value, rangeFilter.value, '', '');
     if (isReplaying) {
       renderReplayFrame();
     } else {
@@ -287,7 +306,8 @@ function handleReset() {
   exitReplay();
   resetCharts();
 
-  return fetch(`/api/history?ticker=${tickerSelect.value}&expiry=all`)
+  const range = document.getElementById('rangeFilter').value;
+  return fetch(`/api/gravity-history?ticker=${tickerSelect.value}&range=${range}`)
     .then(res => res.json())
     .then(history => {
       replayHistory = history;
@@ -352,58 +372,59 @@ function renderReplayFrame() {
   if (replayHistory.length === 0 || replayIndex >= replayHistory.length) return;
 
   const point = replayHistory[replayIndex];
-  const expiry = document.getElementById('expiryFilter').value;
-  const pointGex = getPointGexMetrics(point, expiry);
+  const range = document.getElementById('rangeFilter').value;
+  const pointGravity = getPointGravityMetrics(point);
 
   // 1. 更新模拟时钟与进度条
   simClock.textContent = point.time + ":00";
   const pct = ((point.sec - 9.5 * 3600) / (6.5 * 3600)) * 100;
   timeProgressBar.style.width = `${Math.max(0, Math.min(100, pct))}%`;
 
-  // 2. 更新核心 GEX 指标
+  // 2. 更新核心引力指标
   spotVal.textContent = `$${point.spot.toFixed(2)}`;
-  gexChangeVal.textContent = formatGex(pointGex.gexChange);
-  globalGexVal.textContent = formatGex(pointGex.globalTotalGex);
-  realtimeGexVal.textContent = formatGex(pointGex.realtimeTotalGex);
-  wallsVal.textContent = `${formatWall(pointGex.realtimePutWall)} / ${formatWall(pointGex.realtimeCallWall)}`;
-  zeroGammaVal.textContent = `Zero Gamma: ${formatWall(pointGex.realtimeZeroGamma)}`;
-  influenceCard.className = pointGex.globalTotalGex >= 0 ? 'glass-panel metric-card green' : 'glass-panel metric-card rose';
-  wallsCard.className = pointGex.realtimeTotalGex >= 0 ? 'glass-panel metric-card cyan' : 'glass-panel metric-card rose';
+  gravityShiftVal.textContent = formatGravity(pointGravity.gravityShift);
+  updateReferenceCard(point.gravityReference);
+  openingGravityVal.textContent = formatGravity(pointGravity.openingGravity);
+  liveGravityVal.textContent = formatGravity(pointGravity.liveGravity);
+  wallsVal.textContent = `${formatWall(pointGravity.lowerGravity)} / ${formatWall(pointGravity.upperGravity)}`;
+  gravityAxisVal.textContent = `引力中轴: ${formatWall(pointGravity.gravityAxis)}`;
+  influenceCard.className = pointGravity.openingGravity >= 0 ? 'glass-panel metric-card green' : 'glass-panel metric-card rose';
+  wallsCard.className = pointGravity.liveGravity >= 0 ? 'glass-panel metric-card cyan' : 'glass-panel metric-card rose';
 
-  // 4. 更新 GEX 柱状图
-  const gexData = point.gexData ? point.gexData[expiry] : null;
-  updateGexChartTitle(tickerSelect.value, expiry, point.date, point.time);
+  // 4. 更新引力分布图
+  const gravityMap = point.gravityMap || null;
+  updateGravityChartTitle(tickerSelect.value, range, point.date, point.time);
 
-  if (gexData && gexChart) {
-    const smoothData = smoothGexData(
-      gexData.strikes,
-      gexData.realtimeStrikeGexMillions,
-      gexData.globalStrikeGexMillions
+  if (gravityMap && gravityChart) {
+    const smoothData = smoothGravityData(
+      gravityMap.strikes,
+      gravityMap.liveGravityCurve,
+      gravityMap.openingGravityCurve
     );
-    gexChart.$rawGexData = {
-      strikes: gexData.strikes || [],
-      realtimeStrikeGexMillions: gexData.realtimeStrikeGexMillions || [],
-      globalStrikeGexMillions: gexData.globalStrikeGexMillions || []
+    gravityChart.$rawGravityData = {
+      strikes: gravityMap.strikes || [],
+      liveGravityCurve: gravityMap.liveGravityCurve || [],
+      openingGravityCurve: gravityMap.openingGravityCurve || []
     };
-    gexChart.data.labels = [];
+    gravityChart.data.labels = [];
     
-    // Dataset 0: 实时状态
-    gexChart.data.datasets[0].data = smoothData.realtimeStrikeGex;
-    gexChart.data.datasets[0].pointBackgroundColor = smoothData.realtimeStrikeGex.map(() => 'rgba(255, 42, 95, 1)');
-    gexChart.data.datasets[0].pointBorderColor = smoothData.realtimeStrikeGex.map(() => 'rgba(255, 42, 95, 0.3)');
+    // Dataset 0: 实时引力
+    gravityChart.data.datasets[0].data = smoothData.liveGravityCurve;
+    gravityChart.data.datasets[0].pointBackgroundColor = smoothData.liveGravityCurve.map(() => 'rgba(255, 42, 95, 1)');
+    gravityChart.data.datasets[0].pointBorderColor = smoothData.liveGravityCurve.map(() => 'rgba(255, 42, 95, 0.3)');
 
-    // Dataset 1: 全局地图
-    gexChart.data.datasets[1].data = smoothData.globalStrikeGex;
-    gexChart.data.datasets[1].pointBackgroundColor = smoothData.globalStrikeGex.map(() => 'rgba(156, 163, 175, 0.85)');
-    gexChart.data.datasets[1].pointBorderColor = smoothData.globalStrikeGex.map(() => 'rgba(156, 163, 175, 0.25)');
+    // Dataset 1: 开盘引力
+    gravityChart.data.datasets[1].data = smoothData.openingGravityCurve;
+    gravityChart.data.datasets[1].pointBackgroundColor = smoothData.openingGravityCurve.map(() => 'rgba(156, 163, 175, 0.85)');
+    gravityChart.data.datasets[1].pointBorderColor = smoothData.openingGravityCurve.map(() => 'rgba(156, 163, 175, 0.25)');
 
-    gexChart.options.plugins.verticalLines = [
+    gravityChart.options.plugins.verticalLines = [
       { value: point.spot, color: 'rgba(255, 204, 0, 0.5)', lineWidth: 1, dash: [4, 4], label: 'Spot', offset: 12 },
-      { value: gexData.realtimeCallWall, color: 'rgba(156, 163, 175, 0.45)', lineWidth: 1, label: `Call Wall (${gexData.realtimeCallWall || '无'})`, offset: 35 },
-      { value: gexData.realtimePutWall, color: 'rgba(255, 42, 95, 0.45)', lineWidth: 1, label: `Put Wall (${gexData.realtimePutWall || '无'})`, offset: 55 },
-      { value: gexData.realtimeZeroGamma, color: 'rgba(255, 255, 255, 0.35)', lineWidth: 1, dash: [2, 2], label: `ZeroGamma (${gexData.realtimeZeroGamma || '无'})`, offset: 75 }
+      { value: gravityMap.upperGravity, color: 'rgba(156, 163, 175, 0.45)', lineWidth: 1, label: `上方引力位 (${gravityMap.upperGravity || '无'})`, offset: 35 },
+      { value: gravityMap.lowerGravity, color: 'rgba(255, 42, 95, 0.45)', lineWidth: 1, label: `下方引力位 (${gravityMap.lowerGravity || '无'})`, offset: 55 },
+      { value: gravityMap.gravityAxis, color: 'rgba(255, 255, 255, 0.35)', lineWidth: 1, dash: [2, 2], label: `引力中轴 (${gravityMap.gravityAxis || '无'})`, offset: 75 }
     ];
-    gexChart.update('none');
+    gravityChart.update('none');
   }
 
   // 5. 更新时序图（只绘制到当前播放进度，实现折线向右流动的效果）
@@ -411,14 +432,14 @@ function renderReplayFrame() {
     const historySub = replayHistory.slice(0, replayIndex + 1);
 
     const labels = historySub.map(h => h.time);
-    const globalGex = historySub.map(h => getPointGexMetrics(h, expiry).globalTotalGex / 1e6);
-    const realtimeGex = historySub.map(h => getPointGexMetrics(h, expiry).realtimeTotalGex / 1e6);
-    const gexChange = historySub.map(h => getPointGexMetrics(h, expiry).gexChange / 1e6);
+    const openingGravitySeries = historySub.map(h => getPointGravityMetrics(h).openingGravity / 1e6);
+    const liveGravitySeries = historySub.map(h => getPointGravityMetrics(h).liveGravity / 1e6);
+    const gravityShift = historySub.map(h => getPointGravityMetrics(h).gravityShift / 1e6);
 
     historyChart.data.labels = labels;
-    historyChart.data.datasets[0].data = globalGex;
-    historyChart.data.datasets[1].data = realtimeGex;
-    historyChart.data.datasets[2].data = gexChange;
+    historyChart.data.datasets[0].data = openingGravitySeries;
+    historyChart.data.datasets[1].data = liveGravitySeries;
+    historyChart.data.datasets[2].data = gravityShift;
 
     historyChart.update('none');
   }
@@ -459,36 +480,36 @@ function catmullRomInterpolate(xs, ys, samplesPerSegment = 10) {
   return points;
 }
 
-function smoothGexData(strikes, realtimeStrikeGex, globalStrikeGex) {
+function smoothGravityData(strikes, liveGravityCurve, openingGravityCurve) {
   const xs = (strikes || []).map(Number);
   return {
-    realtimeStrikeGex: catmullRomInterpolate(xs, realtimeStrikeGex || []),
-    globalStrikeGex: catmullRomInterpolate(xs, globalStrikeGex || [])
+    liveGravityCurve: catmullRomInterpolate(xs, liveGravityCurve || []),
+    openingGravityCurve: catmullRomInterpolate(xs, openingGravityCurve || [])
   };
 }
 
-function getExpiryLabel(expiry) {
-  if (expiry === '0dte') return '0DTE';
-  if (expiry === 'weekly') return '1DTE-5DTE';
-  return 'All Expirations';
+function getRangeLabel(range) {
+  if (range === 'today') return '当日引力';
+  if (range === 'near') return '近端引力';
+  return '全部引力';
 }
 
-function updateGexChartTitle(ticker, expiry, date, time) {
-  const titleEl = document.getElementById('gexChartTitle');
+function updateGravityChartTitle(ticker, range, date, time) {
+  const titleEl = document.getElementById('gravityChartTitle');
   if (!titleEl) return;
 
   const parts = [
     ticker ? ticker.toUpperCase() : '',
-    // 'GEX Exposure Map',
-    getExpiryLabel(expiry),
+    // '引力分布图',
+    getRangeLabel(range),
     [date, time].filter(Boolean).join(' ')
   ].filter(Boolean);
 
   titleEl.textContent = parts.join(' · ');
 }
 
-function findNearestRawGexIndex(xValue) {
-  const raw = gexChart && gexChart.$rawGexData;
+function findNearestRawGravityIndex(xValue) {
+  const raw = gravityChart && gravityChart.$rawGravityData;
   if (!raw || !Array.isArray(raw.strikes) || raw.strikes.length === 0) return -1;
 
   let nearestIdx = 0;
@@ -511,7 +532,7 @@ function pollState() {
   if (isReplaying) return; // 回放模式下挂起轮询请求，防止污染
 
   const ticker = tickerSelect.value;
-  fetch(`/api/state?ticker=${ticker}`)
+  fetch(`/api/gravity-state?ticker=${ticker}`)
     .then(res => res.json())
     .then(state => {
       updateUIState(state);
@@ -540,17 +561,18 @@ function updateUIState(state) {
   }
 
   spotVal.textContent = `$${state.spot.toFixed(2)}`;
-  const gex = state.latestGex || {};
-  gexChangeVal.textContent = formatGex(gex.gexChange);
-  globalGexVal.textContent = formatGex(gex.globalTotalGex);
-  realtimeGexVal.textContent = formatGex(gex.realtimeTotalGex);
-  wallsVal.textContent = `${formatWall(gex.realtimePutWall)} / ${formatWall(gex.realtimeCallWall)}`;
-  zeroGammaVal.textContent = `Zero Gamma: ${formatWall(gex.realtimeZeroGamma)}`;
-  influenceCard.className = (gex.globalTotalGex || 0) >= 0 ? 'glass-panel metric-card green' : 'glass-panel metric-card rose';
-  wallsCard.className = (gex.realtimeTotalGex || 0) >= 0 ? 'glass-panel metric-card cyan' : 'glass-panel metric-card rose';
-  statusBadge.textContent = 'MODEL';
+  const gravity = state.latestGravity || {};
+  gravityShiftVal.textContent = formatGravity(gravity.gravityShift);
+  updateReferenceCard(state.gravityReference);
+  openingGravityVal.textContent = formatGravity(gravity.openingGravity);
+  liveGravityVal.textContent = formatGravity(gravity.liveGravity);
+  wallsVal.textContent = `${formatWall(gravity.lowerGravity)} / ${formatWall(gravity.upperGravity)}`;
+  gravityAxisVal.textContent = `引力中轴: ${formatWall(gravity.gravityAxis)}`;
+  influenceCard.className = (gravity.openingGravity || 0) >= 0 ? 'glass-panel metric-card green' : 'glass-panel metric-card rose';
+  wallsCard.className = (gravity.liveGravity || 0) >= 0 ? 'glass-panel metric-card cyan' : 'glass-panel metric-card rose';
+  statusBadge.textContent = '引力流';
   statusBadge.className = 'status-badge badge-neutral';
-  modelNoteContent.textContent = '实时 GEX 为基于大单流修正后的模型估算值，并非官方 OI。';
+  modelNoteContent.textContent = '引力流为模型估算值，用于观察价格容易被吸引、拉扯或释放波动的位置。';
 }
 
 // ==========================================
@@ -558,16 +580,16 @@ function updateUIState(state) {
 // ==========================================
 
 function initCharts() {
-  const gexCtx = document.getElementById('gexChart').getContext('2d');
+  const gravityCtx = document.getElementById('gravityChart').getContext('2d');
   const historyCtx = document.getElementById('historyChart').getContext('2d');
 
-  gexChart = new Chart(gexCtx, {
+  gravityChart = new Chart(gravityCtx, {
     type: 'line',
     data: {
       labels: [],
       datasets: [
         {
-          label: '今日 Profile',
+          label: '实时引力',
           data: [],
           yAxisID: 'y',
           borderColor: 'rgba(255, 42, 95, 1)',
@@ -583,7 +605,7 @@ function initCharts() {
           fill: false
         },
         {
-          label: '基准 Baseline',
+          label: '开盘引力',
           data: [],
           yAxisID: 'yGlobal',
           borderColor: 'rgba(156, 163, 175, 0.85)',
@@ -645,7 +667,7 @@ function initCharts() {
           },
           title: {
             display: true,
-            text: '实时状态 GEX (左轴)',
+            text: '实时引力 (左轴)',
             color: 'rgba(255, 42, 95, 0.8)',
             font: { family: 'Inter', size: 10, weight: 'bold' }
           }
@@ -665,7 +687,7 @@ function initCharts() {
           },
           title: {
             display: true,
-            text: '全局地图 GEX (右轴)',
+            text: '开盘引力 (右轴)',
             color: 'rgba(156, 163, 175, 0.75)',
             font: { family: 'Inter', size: 10, weight: 'bold' }
           }
@@ -684,19 +706,19 @@ function initCharts() {
           enabled: true,
           callbacks: {
             title: function(context) {
-              const nearestIdx = findNearestRawGexIndex(context[0].parsed.x);
-              const raw = gexChart && gexChart.$rawGexData;
+              const nearestIdx = findNearestRawGravityIndex(context[0].parsed.x);
+              const raw = gravityChart && gravityChart.$rawGravityData;
               if (nearestIdx >= 0 && raw) {
-                return `Strike: $${Number(raw.strikes[nearestIdx]).toFixed(0)}`;
+                return `Price: $${Number(raw.strikes[nearestIdx]).toFixed(0)}`;
               }
-              return `Strike: $${context[0].parsed.x.toFixed(2)}`;
+              return `Price: $${context[0].parsed.x.toFixed(2)}`;
             },
             label: function(context) {
               const datasetLabel = context.dataset.label || '';
-              const nearestIdx = findNearestRawGexIndex(context.parsed.x);
-              const raw = gexChart && gexChart.$rawGexData;
+              const nearestIdx = findNearestRawGravityIndex(context.parsed.x);
+              const raw = gravityChart && gravityChart.$rawGravityData;
               if (nearestIdx >= 0 && raw) {
-                const values = context.datasetIndex === 0 ? raw.realtimeStrikeGexMillions : raw.globalStrikeGexMillions;
+                const values = context.datasetIndex === 0 ? raw.liveGravityCurve : raw.openingGravityCurve;
                 const rawValue = values && values[nearestIdx];
                 if (rawValue !== undefined) {
                   return `${datasetLabel}: ${formatCompactNumber(rawValue)}`;
@@ -717,7 +739,7 @@ function initCharts() {
       labels: [],
       datasets: [
         {
-          label: 'Global GEX',
+          label: '开盘引力',
           data: [],
           borderColor: 'rgba(156, 163, 175, 0.85)',
           borderWidth: 1.5,
@@ -727,7 +749,7 @@ function initCharts() {
           pointRadius: 0
         },
         {
-          label: 'Realtime GEX',
+          label: '实时引力',
           data: [],
           borderColor: '#00f2fe',
           borderWidth: 2,
@@ -736,7 +758,7 @@ function initCharts() {
           pointRadius: 0
         },
         {
-          label: 'GEX Change',
+          label: '盘中引力偏移',
           data: [],
           borderColor: '#ffcc00',
           borderWidth: 2,
@@ -761,7 +783,7 @@ function initCharts() {
           ticks: { color: '#00f2fe', font: { family: 'Inter' } },
           title: {
             display: true,
-            text: 'Total GEX ($M)',
+            text: '引力规模 ($M)',
             color: '#00f2fe',
             font: { family: 'Inter', size: 10, weight: 'bold' }
           }
@@ -772,7 +794,7 @@ function initCharts() {
           ticks: { color: '#ffcc00', font: { family: 'Inter' } },
           title: {
             display: true,
-            text: 'GEX Change ($M)',
+            text: '盘中引力偏移 ($M)',
             color: '#ffcc00',
             font: { family: 'Inter', size: 10, weight: 'bold' }
           }
@@ -792,66 +814,66 @@ function updateCharts() {
   if (isReplaying) return;
 
   const ticker = tickerSelect.value;
-  const expiry = document.getElementById('expiryFilter').value;
+  const range = document.getElementById('rangeFilter').value;
   
-  fetch(`/api/gex?ticker=${ticker}&expiry=${expiry}`)
+  fetch(`/api/gravity-map?ticker=${ticker}&range=${range}`)
     .then(res => res.json())
     .then(data => {
-      if (!gexChart) return;
+      if (!gravityChart) return;
 
-      const smoothData = smoothGexData(
+      const smoothData = smoothGravityData(
         data.strikes,
-        data.realtimeStrikeGexMillions,
-        data.globalStrikeGexMillions
+        data.liveGravityCurve,
+        data.openingGravityCurve
       );
-      gexChart.$rawGexData = {
+      gravityChart.$rawGravityData = {
         strikes: data.strikes || [],
-        realtimeStrikeGexMillions: data.realtimeStrikeGexMillions || [],
-        globalStrikeGexMillions: data.globalStrikeGexMillions || []
+        liveGravityCurve: data.liveGravityCurve || [],
+        openingGravityCurve: data.openingGravityCurve || []
       };
-      gexChart.data.labels = [];
+      gravityChart.data.labels = [];
       
-      // Dataset 0: 实时状态
-      gexChart.data.datasets[0].data = smoothData.realtimeStrikeGex;
-      gexChart.data.datasets[0].pointBackgroundColor = smoothData.realtimeStrikeGex.map(() => 'rgba(255, 42, 95, 1)');
-      gexChart.data.datasets[0].pointBorderColor = smoothData.realtimeStrikeGex.map(() => 'rgba(255, 42, 95, 0.3)');
+      // Dataset 0: 实时引力
+      gravityChart.data.datasets[0].data = smoothData.liveGravityCurve;
+      gravityChart.data.datasets[0].pointBackgroundColor = smoothData.liveGravityCurve.map(() => 'rgba(255, 42, 95, 1)');
+      gravityChart.data.datasets[0].pointBorderColor = smoothData.liveGravityCurve.map(() => 'rgba(255, 42, 95, 0.3)');
 
-      // Dataset 1: 全局地图
-      gexChart.data.datasets[1].data = smoothData.globalStrikeGex;
-      gexChart.data.datasets[1].pointBackgroundColor = smoothData.globalStrikeGex.map(() => 'rgba(156, 163, 175, 0.85)');
-      gexChart.data.datasets[1].pointBorderColor = smoothData.globalStrikeGex.map(() => 'rgba(156, 163, 175, 0.25)');
+      // Dataset 1: 开盘引力
+      gravityChart.data.datasets[1].data = smoothData.openingGravityCurve;
+      gravityChart.data.datasets[1].pointBackgroundColor = smoothData.openingGravityCurve.map(() => 'rgba(156, 163, 175, 0.85)');
+      gravityChart.data.datasets[1].pointBorderColor = smoothData.openingGravityCurve.map(() => 'rgba(156, 163, 175, 0.25)');
 
       const currentSpot = parseFloat(spotVal.textContent.replace('$', ''));
-      gexChart.options.plugins.verticalLines = [
+      gravityChart.options.plugins.verticalLines = [
         { value: currentSpot, color: 'rgba(255, 204, 0, 0.5)', lineWidth: 1, dash: [4, 4], label: 'Spot', offset: 12 },
-        { value: data.realtimeCallWall, color: 'rgba(156, 163, 175, 0.45)', lineWidth: 1, label: `Call Wall (${data.realtimeCallWall || '无'})`, offset: 35 },
-        { value: data.realtimePutWall, color: 'rgba(255, 42, 95, 0.45)', lineWidth: 1, label: `Put Wall (${data.realtimePutWall || '无'})`, offset: 55 },
-        { value: data.realtimeZeroGamma, color: 'rgba(255, 255, 255, 0.35)', lineWidth: 1, dash: [2, 2], label: `ZeroGamma (${data.realtimeZeroGamma || '无'})`, offset: 75 }
+        { value: data.upperGravity, color: 'rgba(156, 163, 175, 0.45)', lineWidth: 1, label: `上方引力位 (${data.upperGravity || '无'})`, offset: 35 },
+        { value: data.lowerGravity, color: 'rgba(255, 42, 95, 0.45)', lineWidth: 1, label: `下方引力位 (${data.lowerGravity || '无'})`, offset: 55 },
+        { value: data.gravityAxis, color: 'rgba(255, 255, 255, 0.35)', lineWidth: 1, dash: [2, 2], label: `引力中轴 (${data.gravityAxis || '无'})`, offset: 75 }
       ];
 
-      gexChart.update('none');
+      gravityChart.update('none');
     })
     .catch(err => {
-      console.error('Failed to fetch GEX data:', err);
-      showErrorToast('加载 GEX 数据失败');
+      console.error('Failed to fetch gravity data:', err);
+      showErrorToast('加载引力数据失败');
     });
 
-  fetch(`/api/history?ticker=${ticker}&expiry=${expiry}`)
+  fetch(`/api/gravity-history?ticker=${ticker}&range=${range}`)
     .then(res => res.json())
     .then(history => {
       if (!historyChart || history.length === 0) return;
       const latestPoint = history[history.length - 1];
-      updateGexChartTitle(ticker, expiry, latestPoint.date, latestPoint.time);
+      updateGravityChartTitle(ticker, range, latestPoint.date, latestPoint.time);
 
       const labels = history.map(h => h.time);
-      const globalGex = history.map(h => getPointGexMetrics(h, expiry).globalTotalGex / 1e6);
-      const realtimeGex = history.map(h => getPointGexMetrics(h, expiry).realtimeTotalGex / 1e6);
-      const gexChange = history.map(h => getPointGexMetrics(h, expiry).gexChange / 1e6);
+      const openingGravitySeries = history.map(h => getPointGravityMetrics(h).openingGravity / 1e6);
+      const liveGravitySeries = history.map(h => getPointGravityMetrics(h).liveGravity / 1e6);
+      const gravityShift = history.map(h => getPointGravityMetrics(h).gravityShift / 1e6);
 
       historyChart.data.labels = labels;
-      historyChart.data.datasets[0].data = globalGex;
-      historyChart.data.datasets[1].data = realtimeGex;
-      historyChart.data.datasets[2].data = gexChange;
+      historyChart.data.datasets[0].data = openingGravitySeries;
+      historyChart.data.datasets[1].data = liveGravitySeries;
+      historyChart.data.datasets[2].data = gravityShift;
 
       historyChart.update('none');
     })
@@ -862,13 +884,13 @@ function updateCharts() {
 }
 
 function resetCharts() {
-  if (gexChart) {
-    gexChart.$rawGexData = null;
-    gexChart.data.labels = [];
-    gexChart.data.datasets[0].data = [];
-    gexChart.data.datasets[1].data = [];
-    gexChart.options.plugins.verticalLines = [];
-    gexChart.update();
+  if (gravityChart) {
+    gravityChart.$rawGravityData = null;
+    gravityChart.data.labels = [];
+    gravityChart.data.datasets[0].data = [];
+    gravityChart.data.datasets[1].data = [];
+    gravityChart.options.plugins.verticalLines = [];
+    gravityChart.update();
   }
   if (historyChart) {
     historyChart.data.labels = [];

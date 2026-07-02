@@ -4,9 +4,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>GEX Structure Engine - Opening & Live Gamma Map</title>
+  <title>GravityFlow 引力流</title>
   <!-- SEO Meta Tags -->
-  <meta name="description" content="基于开盘 OI 与盘中大单流修正的实时 GEX 市场结构地图">
+  <meta name="description" content="识别价格容易被吸引、拉扯或释放波动的位置">
   <!-- Stylesheets -->
   <link rel="stylesheet" href="css/style.css">
   <!-- Chart.js CDN -->
@@ -21,8 +21,8 @@
       <div class="brand">
         <div class="brand-logo"></div>
         <div>
-          <h1>GEX STRUCTURE ENGINE</h1>
-          <span>Opening OI • Flow-adjusted Live GEX</span>
+          <h1>GRAVITYFLOW 引力流</h1>
+          <span>Price Gravity • Intraday Flow Shift</span>
         </div>
       </div>
 
@@ -74,65 +74,73 @@
       </div>
     </section>
 
-    <!-- 3. 四个核心指标看板 -->
+    <!-- 3. 核心指标看板 -->
     <section class="metrics-grid">
       <div class="glass-panel metric-card gold">
         <span class="metric-label">Spot</span>
         <div class="metric-val" id="spotVal">$0.00</div>
         <div class="metric-sub">
-          <span>GEX Change:</span>
-          <span id="gexChangeVal" style="color: #fff; font-weight: 600;">$0.00</span>
+          <span>盘中引力偏移:</span>
+          <span id="gravityShiftVal" style="color: #fff; font-weight: 600;">$0.00</span>
+        </div>
+      </div>
+
+      <div class="glass-panel metric-card green" id="referenceCard">
+        <span class="metric-label">引力参考度</span>
+        <div class="metric-val" id="gravityReferenceVal">--</div>
+        <div class="metric-sub">
+          <span id="gravityReferenceNote">等待数据</span>
         </div>
       </div>
 
       <div class="glass-panel metric-card green" id="influenceCard">
-        <span class="metric-label">Global GEX</span>
-        <div class="metric-val" id="globalGexVal">$0.00</div>
+        <span class="metric-label">开盘引力</span>
+        <div class="metric-val" id="openingGravityVal">$0.00</div>
         <div class="metric-sub">
-          <span>Opening OI projected at current spot</span>
+          <span>开盘价格力场在当前价格的投影</span>
         </div>
       </div>
 
       <div class="glass-panel metric-card cyan">
-        <span class="metric-label">Realtime GEX</span>
-        <div class="metric-val" id="realtimeGexVal">$0.00</div>
+        <span class="metric-label">实时引力</span>
+        <div class="metric-val" id="liveGravityVal">$0.00</div>
         <div class="metric-sub">
-          <span>Opening OI + flow delta</span>
+          <span>盘中引力修正后的实时状态</span>
         </div>
       </div>
 
       <div class="glass-panel metric-card rose" id="wallsCard">
-        <span class="metric-label">Live Walls</span>
+        <span class="metric-label">引力区间</span>
         <div class="metric-val" id="wallsVal">-- / --</div>
         <div class="metric-sub">
-          <span id="zeroGammaVal">Zero Gamma: --</span>
+          <span id="gravityAxisVal">引力中轴: --</span>
         </div>
       </div>
     </section>
 
     <!-- 4. 双图表展示区 -->
     <section class="charts-grid">
-      <!-- GEX 柱状图 -->
+      <!-- 引力分布图 -->
       <div class="glass-panel">
         <div class="chart-header">
-          <h3 class="chart-title" id="gexChartTitle">GEX Exposure Map</h3>
+          <h3 class="chart-title" id="gravityChartTitle">引力分布图</h3>
           <div class="chart-actions" style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap;">
-            <select id="expiryFilter"
+            <select id="rangeFilter"
               style="background: rgba(30, 41, 59, 0.7); color: #fff; border: 1px solid rgba(255, 255, 255, 0.1); padding: 4px 8px; border-radius: 4px; outline: none; font-size: 13px; cursor: pointer;">
-              <option value="all">所有到期日</option>
-              <option value="0dte">仅看 0DTE</option>
-              <option value="weekly">仅看 1DTE-5DTE</option>
+              <option value="all">全部引力</option>
+              <option value="today">当日引力</option>
+              <option value="near">近端引力</option>
             </select>
           </div>
         </div>
         <div class="chart-wrapper">
-          <canvas id="gexChart"></canvas>
+          <canvas id="gravityChart"></canvas>
         </div>
       </div>
 
       <div class="glass-panel">
         <div class="chart-header">
-          <h3 class="chart-title">GEX Intraday Trend</h3>
+          <h3 class="chart-title">盘中引力变化</h3>
         </div>
         <div class="chart-wrapper">
           <canvas id="historyChart"></canvas>
@@ -140,15 +148,15 @@
       </div>
     </section>
 
-    <!-- 5. 模型说明面板 -->
+    <!-- 5. 引力流说明面板 -->
     <section class="glass-panel analysis-panel">
       <div class="analysis-header">
         <h3 class="analysis-title">
-          Realtime Model Note
+          引力流提示
         </h3>
-        <div id="statusBadge" class="status-badge badge-neutral">MODEL</div>
+        <div id="statusBadge" class="status-badge badge-neutral">引力流</div>
       </div>
-      <div id="modelNoteContent" class="report-content">实时 GEX 为基于大单流修正后的模型估算值，并非官方 OI。</div>
+      <div id="modelNoteContent" class="report-content">引力流为模型估算值，引力位不是预测目标，而是需要重点观察的关键价格。</div>
     </section>
 
   </div>
