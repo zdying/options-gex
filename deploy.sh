@@ -21,7 +21,7 @@ PM2_APP_NAME="${PM2_APP_NAME:-options-indicator}"
 NODE_ENV="${NODE_ENV:-production}"
 PORT="${PORT:-3000}"
 
-if [[ ! -f "${ROOT_DIR}/package.json" || ! -f "${ROOT_DIR}/src/server.js" ]]; then
+if [[ ! -f "${ROOT_DIR}/package.json" || ! -f "${ROOT_DIR}/src/app.js" ]]; then
   echo "[deploy] Error: options-indicator source files missing in ${ROOT_DIR}" >&2
   exit 1
 fi
@@ -67,7 +67,7 @@ ssh "${SSH_ARGS[@]}" "${REMOTE_HOST}" "bash -lc '
     NODE_ENV=\"${NODE_ENV}\" PORT=\"${PORT}\" pm2 restart \"${PM2_APP_NAME}\" --update-env
   else
     echo \"[deploy] Starting new PM2 process...\"
-    NODE_ENV=\"${NODE_ENV}\" PORT=\"${PORT}\" pm2 start src/server.js --name \"${PM2_APP_NAME}\"
+    NODE_ENV=\"${NODE_ENV}\" PORT=\"${PORT}\" pm2 start src/app.js --name \"${PM2_APP_NAME}\"
   fi
   pm2 save
 '"

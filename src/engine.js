@@ -1,13 +1,12 @@
 /**
- * @file server.js
- * @description 主应用 Express 服务器与交易流实时采集计算器。
+ * @file engine.js
+ * @description 交易流实时采集与分钟级期权链 Greeks/GEX 计算引擎。
  * 对接 Benzinga 实时接口，提供盘中实时大单流采集与分钟级期权链 Greeks 重算服务，
  * 并支持日内历史走势的积累与局部回放。
  */
 
 const fs = require('fs');
 const path = require('path');
-const express = require('express');
 const dns = require('dns');
 
 // 强制域名解析优先使用 IPv4，彻底避免因本地未配置 IPv6 路由导致 Node.js fetch 无限期挂起和等待超时
@@ -17,8 +16,7 @@ dns.setDefaultResultOrder('ipv4first');
 const { calculateImpliedVolatility } = require('./calculator/bsCalculator');
 const { calculateT, clampTradingTime } = require('./utils/sharedUtils');
 const pricingConfig = require('./config/pricingConfig');
-const gravityPresenter = require('./presenter/gravityPresenter');
-const logger = require('./utils/logger')('server');
+const logger = require('./utils/logger')('engine');
 
 /**
  * 辅助工具：带超时控制与失败重试机制的 fetch 请求，支持 Connection: close 避免 keep-alive 假死
@@ -55,12 +53,6 @@ async function fetchWithRetry(url, options = {}, timeout = 10000, maxRetries = 3
 const PositionStore = require('./store/positionStore');
 const GexAggregator = require('./engine/gexAggregator');
 const economicCalendarRegime = require('./engine/economicCalendarRegime');
-
-const app = express();
-const PORT = process.env.PORT || 3080;
-
-app.use(express.json());
-app.use(express.static(path.join(__dirname, '../public')));
 
 // ==========================================
 // 0. 时区兼容核心工具函数 (锁定美东时间 America/New_York)
@@ -1181,251 +1173,19 @@ async function initializeAllTickers() {
   await updateSystemRegime();
 })();
 
-// ==========================================
-// 5. RESTful API 接口实现
-// ==========================================
-
-// 获取支持的 Ticker 列表
-app.get('/api/tickers', (req, res) => {
-  const result = sortedTickers.map(t => {
-    const ticker = t.name.toUpperCase();
-    const liveCount = liveTickerCounts[ticker] || 0;
-    return {
-      name: t.name,
-      count: liveCount > 0 ? liveCount : getLatestTradesCountForTicker(ticker)
-    };
-  });
-  res.json(result);
-});
-
-
-
-
-
-// 获取当前模拟状态与决策报告
-app.get('/api/gravity-state', async (req, res) => {
-  const ticker = (req.query.ticker || 'AAPL').toUpperCase();
-  const state = getTickerState(ticker);
-  if (state) {
-    if (!state.latestGex || !state.history || state.history.length === 0) {
-      const latestHistory = getLatestHistoryForTicker(ticker);
-      if (latestHistory.history.length > 0) {
-        const lastPoint = latestHistory.history[latestHistory.history.length - 1];
-        state.history = latestHistory.history;
-        state.spot = lastPoint.spot || state.spot;
-        state.latestGex = getPrimaryGexMetrics(lastPoint.gexData) || state.latestGex;
-        if (lastPoint.gexData) {
-          state.gexSummary = lastPoint.gexData;
-        }
-      }
-    }
-
-    const quotePrices = await fetchTipRanksQuotePrices([ticker]);
-    if (quotePrices[ticker]) {
-      state.spot = quotePrices[ticker];
-    }
+module.exports = {
+  BUILTIN_TICKERS,
+  buildExpiryViews,
+  buildGexSummaries,
+  fetchTipRanksQuotePrices,
+  getCurrentRegime,
+  getEstDateStr,
+  getPrimaryGexMetrics,
+  liveTickerCounts,
+  secondsToTimeString,
+  sortedTickers,
+  tickerStates,
+  get currentSystemRegime() {
+    return currentSystemRegime;
   }
-  res.json(await getClientGravityState(ticker));
-});
-
-
-
-// 获取指定标的最近有历史数据的日期
-function getLatestTradeDateWithData(ticker) {
-  const liveDataRoot = path.join(__dirname, '../data/live_data');
-  if (!fs.existsSync(liveDataRoot)) return null;
-
-  try {
-    const dates = fs.readdirSync(liveDataRoot)
-      .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d))
-      .sort((a, b) => b.localeCompare(a)); // 降序，最新的在前面
-
-    for (const dateStr of dates) {
-      const tickerDir = path.join(liveDataRoot, dateStr, ticker);
-      const openChainPath = path.join(tickerDir, 'optionchains_open.json');
-      if (fs.existsSync(openChainPath)) {
-        return dateStr;
-      }
-    }
-  } catch (e) {
-    logger.error(`[GEX API] Error finding latest trade date for ${ticker}:`, e);
-  }
-  return null;
-}
-
-function safeReadJson(filePath, fallback = null) {
-  if (!fs.existsSync(filePath)) return fallback;
-  try {
-    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
-  } catch (e) {
-    logger.warn(`[Cache] Failed to read JSON cache ${filePath}: ${e.message}`);
-    return fallback;
-  }
-}
-
-function getLatestHistoryForTicker(ticker) {
-  const latestDateStr = getLatestTradeDateWithData(ticker);
-  if (!latestDateStr) {
-    return { date: null, history: [] };
-  }
-
-  const historyPath = path.join(__dirname, '../data/live_data', latestDateStr, ticker, 'history.json');
-  const history = safeReadJson(historyPath, []);
-  return {
-    date: latestDateStr,
-    history: Array.isArray(history) ? history : []
-  };
-}
-
-function getLatestTradesCountForTicker(ticker) {
-  const latestDateStr = getLatestTradeDateWithData(ticker);
-  if (!latestDateStr) return 0;
-
-  const tradesPath = path.join(__dirname, '../data/live_data', latestDateStr, ticker, 'trades.json');
-  const trades = safeReadJson(tradesPath, []);
-  return Array.isArray(trades) ? trades.length : 0;
-}
-
-// 获取当前的引力分布图数据
-app.get('/api/gravity-map', async (req, res) => {
-  const ticker = (req.query.ticker || 'AAPL').toUpperCase();
-  const range = gravityPresenter.getRequestedRange(req);
-  const expiry = gravityPresenter.mapRangeToExpiry(range);
-  const todayStr = getEstDateStr();
-  const emptySummary = gravityPresenter.emptyMap();
-
-  const state = getTickerState(ticker);
-  if (!state) {
-    return res.json(emptySummary);
-  }
-
-  let spot = state.spot;
-  const isMarketClosed = state.currentTimeSeconds >= 16 * 3600 || currentSystemRegime === 'IDLE';
-
-  if (state.gexSummary && state.gexSummary[expiry] && state.gexSummary[expiry].strikes && state.gexSummary[expiry].strikes.length > 0) {
-    return res.json(gravityPresenter.toMap(state.gexSummary[expiry]));
-  }
-
-  if (isMarketClosed) {
-    const latestHistory = getLatestHistoryForTicker(ticker);
-    if (latestHistory.history.length > 0) {
-      const lastPoint = latestHistory.history[latestHistory.history.length - 1];
-      if (lastPoint.gexData && lastPoint.gexData[expiry]) {
-        logger.info(`[Gravity API] Returned cached ${range} gravity map from ${latestHistory.date} history for ${ticker}.`);
-        return res.json(gravityPresenter.toMap(lastPoint.gexData[expiry]));
-      }
-    }
-  }
-
-  if (state.calculatedMatrix && state.calculatedMatrix.length > 0) {
-    const matrixViews = buildExpiryViews(state.calculatedMatrix, todayStr);
-    state.matrixViews = matrixViews;
-    state.gexSummary = buildGexSummaries(matrixViews, spot);
-    return res.json(gravityPresenter.toMap(state.gexSummary[expiry]) || emptySummary);
-  }
-
-  return res.json(emptySummary);
-});
-
-// 获取引力历史走势
-app.get('/api/gravity-history', (req, res) => {
-  const ticker = (req.query.ticker || 'AAPL').toUpperCase();
-  const range = gravityPresenter.getRequestedRange(req);
-
-  const state = tickerStates[ticker];
-  let historyPoints = [];
-  let historyDate = getLatestTradeDateWithData(ticker);
-  if (state) {
-    historyPoints = state.history;
-    if (!historyPoints || historyPoints.length === 0) {
-      const latestHistory = getLatestHistoryForTicker(ticker);
-      historyPoints = latestHistory.history;
-      historyDate = latestHistory.date || historyDate;
-      if (historyPoints.length > 0) {
-        state.history = historyPoints;
-        const lastPoint = historyPoints[historyPoints.length - 1];
-        state.spot = lastPoint.spot || state.spot;
-        state.latestGex = getPrimaryGexMetrics(lastPoint.gexData) || state.latestGex;
-        if (lastPoint.gexData) {
-          state.gexSummary = lastPoint.gexData;
-        }
-      }
-    }
-  } else {
-    const latestHistory = getLatestHistoryForTicker(ticker);
-    historyPoints = latestHistory.history;
-    historyDate = latestHistory.date || historyDate;
-  }
-
-  const formattedHistory = historyPoints.map(h => {
-    const gravityMap = gravityPresenter.mapForHistoryPoint(h, range);
-    const gravityMetrics = gravityPresenter.metricsForHistoryPoint(h, range);
-    return {
-      time: h.time,
-      date: h.date || historyDate,
-      sec: h.sec,
-      spot: h.spot,
-      ...gravityMetrics,
-      gravityMap
-    };
-  });
-  res.json(formattedHistory);
-});
-
-/**
- * 辅助函数：安全获取指定标的的状态容器，带有兜底退路防崩溃机制
- */
-function getTickerState(ticker) {
-  const defaultTicker = (BUILTIN_TICKERS && BUILTIN_TICKERS[0]) ? BUILTIN_TICKERS[0] : 'SPY';
-  ticker = (ticker || defaultTicker).toUpperCase();
-  let state = tickerStates[ticker];
-  if (!state) {
-    state = tickerStates[defaultTicker];
-  }
-  if (!state) {
-    const keys = Object.keys(tickerStates);
-    if (keys.length > 0) {
-      state = tickerStates[keys[0]];
-    }
-  }
-  return state;
-}
-
-/**
- * 包装过滤给前端的状态数据
- */
-async function getClientGravityState(ticker) {
-  const defaultTicker = (BUILTIN_TICKERS && BUILTIN_TICKERS[0]) ? BUILTIN_TICKERS[0] : 'SPY';
-  ticker = (ticker || defaultTicker).toUpperCase();
-  let state = tickerStates[ticker];
-  if (!state) {
-    state = tickerStates[defaultTicker];
-  }
-  if (!state) {
-    const keys = Object.keys(tickerStates);
-    if (keys.length > 0) {
-      state = tickerStates[keys[0]];
-    }
-  }
-  if (!state) {
-    return gravityPresenter.statePayload({ ticker, gravityReference: await getCurrentRegime() }, ticker);
-  }
-  const gravityReference = await getCurrentRegime();
-  return gravityPresenter.statePayload({
-    ticker: state.ticker,
-    isRunning: state.isRunning,
-    currentTime: secondsToTimeString(state.currentTimeSeconds),
-    currentTimePct: ((state.currentTimeSeconds - 9.5 * 3600) / (6.5 * 3600)) * 100,
-    spot: state.spot,
-    latestMetrics: state.latestGex,
-    gravityReference
-  }, ticker);
-}
-
-// 启动 Express 监听并加载宏观日历
-app.listen(PORT, async () => {
-  logger.info(`==========================================`);
-  logger.info(`GEX Structure Engine is running at:`);
-  logger.info(`http://localhost:${PORT}`);
-  logger.info(`==========================================`);
-});
+};
