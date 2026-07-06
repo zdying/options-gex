@@ -1,7 +1,6 @@
 // 全局图表实例
 let gravityChart = null;
 let historyChart = null;
-let updateInterval = null;
 
 // 本地回放专用的全局状态
 let isReplaying = false;
@@ -10,6 +9,34 @@ let replayIndex = 0;
 let replayTimer = null;
 let replaySpeed = 60; // 默认 60 倍速
 let tooltipDismissTimer = null;
+
+const ACCESS_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0eXBlIjoiYWNjZXNzIiwic3ViIjoiYTdkNmE1NjgtNzdkMS00NGI0LWFhZTAtZjVmNmU1MGMwODY1IiwiZW1haWwiOiJkZXZAa2FpcmFsZXJ0LnBybyIsInRpZXIiOiJwcm8rIiwiaWF0IjoxNzgzMzAxOTI4LCJleHAiOjE3ODU4OTM5Mjh9.q7bcqZuCZ4psZH-ruul_rCDMke76ZrqqJP3FzFyit2k';
+
+function fetchJson(url, options) {
+  const fetchOptions = {
+    ...(options || {}),
+    headers: {
+      ...(options && options.headers ? options.headers : {}),
+      Authorization: `Bearer ${ACCESS_TOKEN}`
+    }
+  };
+
+  return fetch(url, fetchOptions).then(async res => {
+    if (!res.ok) {
+      let message = `HTTP ${res.status}`;
+      try {
+        const data = await res.json();
+        if (data && data.error) {
+          message = data.error;
+        }
+      } catch {
+        // Ignore invalid error bodies.
+      }
+      throw new Error(message);
+    }
+    return res.json();
+  });
+}
 
 function formatCompactNumber(value) {
   const num = Number(value);
@@ -209,8 +236,51 @@ const topAxisGridPlugin = {
   }
 };
 
+const activePointPlugin = {
+  id: 'activePointPlugin',
+  afterDatasetsDraw: (chart) => {
+    const activeElements = chart.getActiveElements();
+    if (!activeElements || activeElements.length === 0) return;
+
+    const { ctx, chartArea } = chart;
+    activeElements.forEach(active => {
+      const point = active.element;
+      if (!point) return;
+      const { x, y } = point;
+      if (
+        !Number.isFinite(x) ||
+        !Number.isFinite(y) ||
+        x < chartArea.left ||
+        x > chartArea.right ||
+        y < chartArea.top ||
+        y > chartArea.bottom
+      ) {
+        return;
+      }
+
+      const dataset = chart.data.datasets[active.datasetIndex] || {};
+      const color = dataset.borderColor || '#ffffff';
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(x, y, 5, 0, Math.PI * 2);
+      ctx.fillStyle = '#080a10';
+      ctx.fill();
+      ctx.lineWidth = 2.5;
+      ctx.strokeStyle = color;
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(x, y, 2.2, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.restore();
+    });
+  }
+};
+
 // 注册插件
-Chart.register(verticalLinePlugin, mobileYAxisLabelsPlugin, topAxisGridPlugin);
+Chart.register(verticalLinePlugin, mobileYAxisLabelsPlugin, topAxisGridPlugin, activePointPlugin);
 
 // ==========================================
 // 2. DOM 元素获取
@@ -223,7 +293,6 @@ const speedSelect = document.getElementById('speedSelect');
 
 const simClock = document.getElementById('simClock');
 const timeProgressBar = document.getElementById('timeProgressBar');
-
 const spotVal = document.getElementById('spotVal');
 const gravityShiftVal = document.getElementById('gravityShiftVal');
 const gravityReferenceVal = document.getElementById('gravityReferenceVal');
@@ -247,8 +316,7 @@ const modelNoteContent = document.getElementById('modelNoteContent');
 // ==========================================
 document.addEventListener('DOMContentLoaded', () => {
   // 3.1 加载 Ticker 列表
-  fetch('/api/tickers')
-    .then(res => res.json())
+  fetchJson('/api/tickers')
     .then(tickers => {
       tickerSelect.innerHTML = '';
       tickers.forEach(t => {
@@ -303,8 +371,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // 开启轮询 (每 30 秒刷新)
-  updateInterval = setInterval(pollState, 30000);
 });
 
 // ==========================================
@@ -332,8 +398,7 @@ function handleReset() {
   resetCharts();
 
   const range = document.getElementById('rangeFilter').value;
-  return fetch(`/api/gravity-history?ticker=${tickerSelect.value}&range=${range}`)
-    .then(res => res.json())
+  return fetchJson(`/api/gravity-history?ticker=${tickerSelect.value}&range=${range}`)
     .then(history => {
       replayHistory = history;
       replayIndex = 0;
@@ -516,7 +581,7 @@ function smoothGravityData(strikes, liveGravityCurve, openingGravityCurve) {
 
 function getRangeLabel(range) {
   if (range === 'today') return '当日引力';
-  if (range === 'near') return '近端引力';
+  if (range === 'near') return '近期引力';
   return '全部引力';
 }
 
@@ -605,8 +670,7 @@ function pollState() {
   if (isReplaying) return; // 回放模式下挂起轮询请求，防止污染
 
   const ticker = tickerSelect.value;
-  fetch(`/api/gravity-state?ticker=${ticker}`)
-    .then(res => res.json())
+  fetchJson(`/api/gravity-state?ticker=${ticker}`)
     .then(state => {
       updateUIState(state);
       if (state.isRunning || state.currentTime === '16:00:00') {
@@ -645,7 +709,7 @@ function updateUIState(state) {
   wallsCard.className = (gravity.liveGravity || 0) >= 0 ? 'glass-panel metric-card cyan' : 'glass-panel metric-card rose';
   statusBadge.textContent = '引力流';
   statusBadge.className = 'status-badge badge-neutral';
-  modelNoteContent.textContent = '引力流为模型估算值，用于观察价格容易被吸引、拉扯或释放波动的位置。';
+  modelNoteContent.textContent = '引力流为模型估算值，引力位不是预测目标，而是需要重点观察的关键价格。';
 }
 
 // ==========================================
@@ -740,7 +804,7 @@ function initCharts() {
           },
           title: {
             display: true,
-            text: '实时引力 (左轴)',
+            text: '实时引力',
             color: 'rgba(255, 42, 95, 0.8)',
             font: { family: 'Inter', size: 10, weight: 'bold' }
           }
@@ -760,7 +824,7 @@ function initCharts() {
           },
           title: {
             display: true,
-            text: '开盘引力 (右轴)',
+            text: '全局引力',
             color: 'rgba(156, 163, 175, 0.75)',
             font: { family: 'Inter', size: 10, weight: 'bold' }
           }
@@ -856,7 +920,7 @@ function initCharts() {
           ticks: { color: '#00f2fe', font: { family: 'Inter' } },
           title: {
             display: true,
-            text: '引力规模 ($M)',
+            text: '引力规模',
             color: '#00f2fe',
             font: { family: 'Inter', size: 10, weight: 'bold' }
           }
@@ -867,7 +931,7 @@ function initCharts() {
           ticks: { color: '#ffcc00', font: { family: 'Inter' } },
           title: {
             display: true,
-            text: '盘中引力偏移 ($M)',
+            text: '盘中引力偏移',
             color: '#ffcc00',
             font: { family: 'Inter', size: 10, weight: 'bold' }
           }
@@ -889,8 +953,7 @@ function updateCharts() {
   const ticker = tickerSelect.value;
   const range = document.getElementById('rangeFilter').value;
 
-  fetch(`/api/gravity-map?ticker=${ticker}&range=${range}`)
-    .then(res => res.json())
+  fetchJson(`/api/gravity-map?ticker=${ticker}&range=${range}`)
     .then(data => {
       if (!gravityChart) return;
 
@@ -932,8 +995,7 @@ function updateCharts() {
       showErrorToast('加载引力数据失败');
     });
 
-  fetch(`/api/gravity-history?ticker=${ticker}&range=${range}`)
-    .then(res => res.json())
+  fetchJson(`/api/gravity-history?ticker=${ticker}&range=${range}`)
     .then(history => {
       if (!historyChart || history.length === 0) return;
       const latestPoint = history[history.length - 1];

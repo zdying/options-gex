@@ -9,7 +9,13 @@ const fs = require('fs');
 
 // 导入量化核心组件与工具类
 const { calculateImpliedVolatility } = require('./bsCalculator');
-const { calculateT, clampTradingTime } = require('./utils/sharedUtils');
+const {
+  calculateT,
+  clampTradingTime,
+  getExpirationDayDiff,
+  getOptionGroupExpiration,
+  isExpirationWithinDays
+} = require('./utils/sharedUtils');
 const pricingConfig = require('./pricingConfig');
 const logger = require('./utils/logger')('gex');
 
@@ -190,6 +196,38 @@ function buildGexSummaries(matrixViews, spot) {
   return gexAggregator.buildSummaries(matrixViews, spot);
 }
 
+function countManagedChainContracts(ticker, chainData, todayStr) {
+  if (!chainData || !chainData.optionChains) return 0;
+  const tickerChain = chainData.optionChains.find(
+    c => c.symbol && c.symbol.toUpperCase() === ticker.toUpperCase()
+  );
+  if (!tickerChain || !tickerChain.chains) return 0;
+
+  return tickerChain.chains.reduce((sum, group) => {
+    const expirationStr = getOptionGroupExpiration(group);
+    if (!isExpirationWithinDays(todayStr, expirationStr, 0, 14)) return sum;
+    return sum + (group.calls || []).length + (group.puts || []).length;
+  }, 0);
+}
+
+function needsStoreRebuild(ticker, chainData, todayStr) {
+  const currentCount = store.getPositionMatrix(ticker).length;
+  const chainCount = countManagedChainContracts(ticker, chainData, todayStr);
+  if (chainCount === 0) return false;
+  return currentCount === 0 || currentCount < chainCount * 0.25;
+}
+
+function rebuildTickerStoreFromChain(ticker, chainData, todayStr, state) {
+  const existingTrades = Array.isArray(state && state.trades) ? state.trades : [];
+  const beforeCount = store.getPositionMatrix(ticker).length;
+  store.initializeChain(ticker, chainData, todayStr);
+  existingTrades.forEach(trade => {
+    store.applyTrade(ticker, trade, todayStr);
+  });
+  const afterCount = store.getPositionMatrix(ticker).length;
+  logger.warn(`[LiveChain] Rebuilt ${ticker} position store from live chain. Contracts ${beforeCount} -> ${afterCount}, replayed ${existingTrades.length} trades.`);
+}
+
 function getPrimaryGexMetrics(gexSummary) {
   const all = gexSummary && gexSummary.all ? gexSummary.all : {};
   return {
@@ -227,11 +265,9 @@ function pruneOptionChain(chainData, spot, todayStr) {
   const prunedOptionChains = chainData.optionChains.map(tc => {
     if (!tc || !tc.chains) return tc;
     const filteredChains = tc.chains.map(group => {
-      const expirationDateStr = group.expiration || (group.mmy ? `${group.mmy.substring(0, 4)}-${group.mmy.substring(4, 6)}-${group.mmy.substring(6, 8)}` : null);
+      const expirationDateStr = getOptionGroupExpiration(group);
       if (!expirationDateStr) return null;
-      const expDate = new Date(expirationDateStr + 'T00:00:00Z');
-      const curDate = new Date(todayStr + 'T00:00:00Z');
-      const diffDays = Math.round((expDate - curDate) / (1000 * 60 * 60 * 24));
+      const diffDays = getExpirationDayDiff(todayStr, expirationDateStr);
       if (diffDays < 0 || diffDays > 14) {
         return null;
       }
@@ -566,12 +602,6 @@ async function updateChainAndRecalculate(ticker) {
     logger.error(`[LiveChain] Error fetching options chain for ${ticker}:`, err.message);
   }
 
-  if (chainData) {
-    store.updateChainPrices(ticker, chainData);
-  } else {
-    logger.warn(`[LiveChain] No option chain data retrieved for ${ticker}. Greeks will be calculated using trade-inferred and cached IVs.`);
-  }
-
   const estDetails = getEstTime();
   const timeNowStr = estDetails.timeStr;
   state.currentTimeSeconds = estDetails.seconds;
@@ -589,6 +619,18 @@ async function updateChainAndRecalculate(ticker) {
   if (!state.spot) {
     logger.warn(`[LiveChain] No spot price available yet for ${ticker}, skipping calculations.`);
     return;
+  }
+
+  if (chainData) {
+    if (needsStoreRebuild(ticker, chainData, todayStr)) {
+      rebuildTickerStoreFromChain(ticker, chainData, todayStr, state);
+    }
+    const updateStats = store.updateChainPrices(ticker, chainData, todayStr);
+    if (updateStats && updateStats.inserted > 0) {
+      logger.info(`[LiveChain] Upserted ${updateStats.inserted} missing contracts for ${ticker}; updated ${updateStats.updated}.`);
+    }
+  } else {
+    logger.warn(`[LiveChain] No option chain data retrieved for ${ticker}. Greeks will be calculated using trade-inferred and cached IVs.`);
   }
 
   const clampedTimeNowStr = clampTradingTime(timeNowStr);

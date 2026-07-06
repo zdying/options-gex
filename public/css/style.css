@@ -206,6 +206,7 @@ select {
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.1);
   color: var(--text-primary);
+  color-scheme: dark;
   padding: 10px 40px 10px 16px;
   border-radius: 8px;
   font-size: 14px;
@@ -213,6 +214,16 @@ select {
   outline: none;
   cursor: pointer;
   transition: all var(--transition-fast);
+}
+
+select option {
+  background-color: #111827;
+  color: var(--text-primary);
+}
+
+select option:checked {
+  background-color: #1f2937;
+  color: #ffffff;
 }
 
 select:focus {

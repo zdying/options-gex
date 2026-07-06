@@ -43,7 +43,7 @@ async function fetchWithRetry(url, options = {}, timeout = 10000, maxRetries = 3
 
 /**
  * 拉取指定标的的 Benzinga 期权链数据
- * @param {string} ticker 
+ * @param {string} ticker
  * @returns {Promise<any>}
  */
 async function fetchOptionChain(ticker) {
@@ -70,17 +70,17 @@ async function fetchLiveChain(ticker) {
 
 /**
  * 分页拉取增量大单数据
- * @param {number} lastUpdatedCursor 
+ * @param {number} lastUpdatedCursor
  * @returns {Promise<any>}
  */
 async function fetchLiveTrades(lastUpdatedCursor) {
   const params = new URLSearchParams({
-    pagesize: 200,
+    pagesize: 300,
     'parameters[updated]': lastUpdatedCursor,
     'parameters[dateSearchField]': 'target'
   });
   const url = `https://api.benzinga.com/api/v1/signal/option_activity?${params.toString()}`;
-  
+
   const response = await fetchWithRetry(url, {
     headers: {
       'Accept': 'application/json',
@@ -97,7 +97,7 @@ async function fetchLiveTrades(lastUpdatedCursor) {
 
 /**
  * 批量拉取多个 ticker 的实时报价并提取股价
- * @param {string[]} tickers 
+ * @param {string[]} tickers
  * @returns {Promise<Record<string, number>>}
  */
 async function fetchQuotes(tickers) {
@@ -145,11 +145,38 @@ async function fetchQuotePrices(tickers) {
   return fetchQuotes(tickers);
 }
 
+async function fetchProPlusUsers() {
+  if (!env.PRO_PLUS_USERS_AUTHORIZATION) {
+    throw new Error('PRO_PLUS_USERS_AUTHORIZATION is not configured');
+  }
+
+  const url = 'https://app.kairalert.pro/api/internal/pro-plus-users';
+  const response = await fetchWithRetry(url, {
+    headers: {
+      'Accept': 'application/json',
+      'Authorization': env.PRO_PLUS_USERS_AUTHORIZATION
+    }
+  }, 10000);
+
+  if (response.status !== 200) {
+    throw new Error(`Pro plus users API returned status ${response.status}`);
+  }
+
+  const data = await response.json();
+
+  if (!data || !Array.isArray(data.users)) {
+    throw new Error('Pro plus users API returned invalid users payload');
+  }
+
+  return data.users;
+}
+
 module.exports = {
   fetchOptionChain,
   fetchOpeningChain,
   fetchLiveChain,
   fetchLiveTrades,
   fetchQuotes,
-  fetchQuotePrices
+  fetchQuotePrices,
+  fetchProPlusUsers
 };

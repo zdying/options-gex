@@ -6,7 +6,13 @@
  */
 
 const { calculateBSGreeks, calculateImpliedVolatility } = require('./bsCalculator');
-const { calculateT, calculateDayT, determineTradeDirection } = require('./utils/sharedUtils');
+const {
+  calculateT,
+  calculateDayT,
+  determineTradeDirection,
+  getOptionGroupExpiration,
+  isExpirationWithinDays
+} = require('./utils/sharedUtils');
 const pricingConfig = require('./pricingConfig');
 
 class PositionStore {
@@ -49,14 +55,13 @@ class PositionStore {
 
     // 遍历每一个到期日的分组
     tickerChain.chains.forEach(expiryGroup => {
-      const expirationDateStr = this._parseExpirationDate(expiryGroup.mmy); // 将 YYYYMMDD 转为 YYYY-MM-DD
+      const expirationDateStr = getOptionGroupExpiration(expiryGroup);
+      if (!expirationDateStr) {
+        return;
+      }
       
       // 过滤到期日，最多两个星期内（14天）
-      // Bug #14: 显式指定美东时区防止时区歧义
-      const expDate = new Date(expirationDateStr + 'T00:00:00Z');
-      const curDate = new Date(currentDateStr + 'T00:00:00Z');
-      const diffDays = Math.round((expDate - curDate) / (1000 * 60 * 60 * 24));
-      if (diffDays < 0 || diffDays > 14) {
+      if (!isExpirationWithinDays(currentDateStr, expirationDateStr, 0, 14)) {
         return; // 跳过
       }
 
@@ -340,15 +345,6 @@ class PositionStore {
   }
 
   /**
-   * 内部方法：解析 API 返回的 MMY 格式 (YYYYMMDD) 为 YYYY-MM-DD
-   * @private
-   */
-  _parseExpirationDate(mmy) {
-    if (!mmy || mmy.length !== 8) return mmy;
-    return `${mmy.substring(0, 4)}-${mmy.substring(4, 6)}-${mmy.substring(6, 8)}`;
-  }
-
-  /**
    * 内部方法：判定盘中大单交易的方向是客户买入（BUY）还是客户卖出（SELL）
    * @private
    */
@@ -364,43 +360,70 @@ class PositionStore {
     return this.dividendYieldByTicker[ticker] || 0;
   }
 
+  _isWithinManagedExpiry(expirationStr, currentDateStr) {
+    return isExpirationWithinDays(currentDateStr, expirationStr, 0, 14);
+  }
+
+  _upsertOptionQuote(ticker, opt, type, expirationStr) {
+    const symbol = opt && opt.symbol;
+    if (!symbol) return { inserted: 0, updated: 0 };
+
+    if (!this.store[ticker][symbol]) {
+      this._registerOption(ticker, opt, type, expirationStr);
+      return { inserted: 1, updated: 0 };
+    }
+
+    const contract = this.store[ticker][symbol];
+    const bid = parseFloat(opt.bidPrice) || 0;
+    const ask = parseFloat(opt.askPrice) || 0;
+    contract.bid = bid;
+    contract.ask = ask;
+    contract.midpoint = (bid + ask) / 2.0;
+    contract.ivRealtime = undefined;
+    contract.ivGlobal = undefined;
+    return { inserted: 0, updated: 1 };
+  }
+
   /**
-   * 盘中每分钟用最新期权链更新已有合约的报价，供重算实时 Greeks 使用
+   * 盘中每分钟用最新期权链更新报价；缺失合约会自动补建，避免重启后进入 trade-only 状态。
    * @param {string} ticker - 标的代码
    * @param {object} benzingaChain - Benzinga 期权链 API 响应对象
+   * @param {string} currentDateStr - 当前日期
    */
-  updateChainPrices(ticker, benzingaChain) {
+  updateChainPrices(ticker, benzingaChain, currentDateStr = new Date().toISOString().split('T')[0]) {
     const uppercaseTicker = ticker.toUpperCase();
-    if (!this.store[uppercaseTicker] || !benzingaChain || !benzingaChain.optionChains) {
-      return;
+    if (!this.store[uppercaseTicker]) {
+      this.store[uppercaseTicker] = {};
+    }
+    if (!benzingaChain || !benzingaChain.optionChains) {
+      return { inserted: 0, updated: 0 };
     }
     const tickerChain = benzingaChain.optionChains.find(
-      c => c.symbol.toUpperCase() === uppercaseTicker
+      c => c.symbol && c.symbol.toUpperCase() === uppercaseTicker
     );
     if (!tickerChain || !tickerChain.chains) {
-      return;
+      return { inserted: 0, updated: 0 };
     }
+
+    const stats = { inserted: 0, updated: 0 };
     tickerChain.chains.forEach(expiryGroup => {
-      const updateContracts = (opts) => {
+      const expirationStr = getOptionGroupExpiration(expiryGroup);
+      if (!this._isWithinManagedExpiry(expirationStr, currentDateStr)) {
+        return;
+      }
+
+      const upsertContracts = (opts, type) => {
         if (!opts) return;
         opts.forEach(opt => {
-          const symbol = opt.symbol;
-          const contract = this.store[uppercaseTicker][symbol];
-          if (contract) {
-            const bid = parseFloat(opt.bidPrice) || 0;
-            const ask = parseFloat(opt.askPrice) || 0;
-            contract.bid = bid;
-            contract.ask = ask;
-            contract.midpoint = (bid + ask) / 2.0;
-            // 报价变了，强制清除缓存的旧 IV，使后续计算重新反推
-            contract.ivRealtime = undefined;
-            contract.ivGlobal = undefined;
-          }
+          const result = this._upsertOptionQuote(uppercaseTicker, opt, type, expirationStr);
+          stats.inserted += result.inserted;
+          stats.updated += result.updated;
         });
       };
-      updateContracts(expiryGroup.calls);
-      updateContracts(expiryGroup.puts);
+      upsertContracts(expiryGroup.calls, 'CALL');
+      upsertContracts(expiryGroup.puts, 'PUT');
     });
+    return stats;
   }
 }
 

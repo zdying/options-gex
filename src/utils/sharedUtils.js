@@ -49,6 +49,34 @@ function calculateDayT(currentDateStr, expirationDateStr) {
   return Math.max(1, diffDays) / 365.0;
 }
 
+function normalizeExpirationDate(value) {
+  if (value === undefined || value === null) return null;
+  const raw = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  if (/^\d{8}$/.test(raw)) {
+    return `${raw.substring(0, 4)}-${raw.substring(4, 6)}-${raw.substring(6, 8)}`;
+  }
+  return null;
+}
+
+function getOptionGroupExpiration(group) {
+  if (!group) return null;
+  return normalizeExpirationDate(group.expiration) || normalizeExpirationDate(group.mmy);
+}
+
+function getExpirationDayDiff(currentDateStr, expirationDateStr) {
+  const normalizedExpiration = normalizeExpirationDate(expirationDateStr);
+  if (!normalizedExpiration) return NaN;
+  const expDate = new Date(normalizedExpiration + 'T00:00:00Z');
+  const curDate = new Date(currentDateStr + 'T00:00:00Z');
+  return Math.round((expDate - curDate) / (1000 * 60 * 60 * 24));
+}
+
+function isExpirationWithinDays(currentDateStr, expirationDateStr, minDays = 0, maxDays = 14) {
+  const diffDays = getExpirationDayDiff(currentDateStr, expirationDateStr);
+  return Number.isFinite(diffDays) && diffDays >= minDays && diffDays <= maxDays;
+}
+
 /**
  * 判定盘中大单交易的方向是客户买入（BUY）还是客户卖出（SELL）
  * @param {string} executionEstimate - trade.execution_estimate
@@ -93,6 +121,10 @@ module.exports = {
   timeStringToSeconds,
   calculateT,
   calculateDayT,
+  normalizeExpirationDate,
+  getOptionGroupExpiration,
+  getExpirationDayDiff,
+  isExpirationWithinDays,
   determineTradeDirection,
   clampTradingTime
 };
