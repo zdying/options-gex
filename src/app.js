@@ -9,6 +9,16 @@ const marketScheduler = require('./marketScheduler');
 const app = express();
 const PORT = process.env.PORT || 3080;
 
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', 'https://app.kairalert.pro');
+  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+  return next();
+});
+
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../public')));
 
