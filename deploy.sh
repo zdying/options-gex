@@ -19,7 +19,7 @@ REMOTE_PORT="${REMOTE_PORT:-}"
 REMOTE_SERVER_DIR="${REMOTE_SERVER_DIR:-/home/ubuntu/options-indicator}"
 PM2_APP_NAME="${PM2_APP_NAME:-options-indicator}"
 NODE_ENV="${NODE_ENV:-production}"
-PORT="${PORT:-3000}"
+PORT="${PORT:-443}"
 
 if [[ ! -f "${ROOT_DIR}/package.json" || ! -f "${ROOT_DIR}/src/app.js" ]]; then
   echo "[deploy] Error: options-indicator source files missing in ${ROOT_DIR}" >&2
@@ -57,7 +57,7 @@ echo "[deploy] Installing dependencies and reloading PM2 on remote..."
 ssh "${SSH_ARGS[@]}" "${REMOTE_HOST}" "bash -lc '
   set -euo pipefail
   cd ${REMOTE_SERVER_DIR@Q}
-  
+
   # 安装生产环境依赖
   npm install --omit=dev
 

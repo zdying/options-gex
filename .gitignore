@@ -18,6 +18,9 @@ yarn-debug.log*
 yarn-error.log*
 *.log
 
+# Local TLS certificates
+certs/*.key
+
 # Large data files / dynamic directories
 data/
 2026-06-18.json
