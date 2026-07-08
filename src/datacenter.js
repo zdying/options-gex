@@ -12,7 +12,7 @@ dns.setDefaultResultOrder('ipv4first');
 /**
  * 辅助工具：带超时控制与失败重试机制的 fetch 请求，支持 Connection: close 避免 keep-alive 假死
  */
-async function fetchWithRetry(url, options = {}, timeout = 10000, maxRetries = 3, delay = 2000) {
+async function fetchWithRetry(url, options = {}, timeout = 20000, maxRetries = 3, delay = 2000) {
   if (!options.headers) {
     options.headers = {};
   }
@@ -53,7 +53,7 @@ async function fetchOptionChain(ticker) {
       'Accept': 'application/json',
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
     }
-  }, 10000);
+  }, 20000);
   if (response.status !== 200) {
     throw new Error(`Benzinga optionchain returned status ${response.status}`);
   }
@@ -75,7 +75,7 @@ async function fetchLiveChain(ticker) {
  */
 async function fetchLiveTrades(lastUpdatedCursor) {
   const params = new URLSearchParams({
-    pagesize: 300,
+    pagesize: 200,
     'parameters[updated]': lastUpdatedCursor,
     'parameters[dateSearchField]': 'target'
   });
@@ -87,7 +87,7 @@ async function fetchLiveTrades(lastUpdatedCursor) {
       'Cookie': env.BENZINGA_COOKIE,
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
     }
-  }, 10000);
+  }, 20000);
 
   if (response.status !== 200) {
     throw new Error(`Benzinga trades returned status ${response.status}`);
@@ -117,7 +117,7 @@ async function fetchQuotes(tickers) {
   const url = `https://marketsv3.tipranks.com/api/quotes/GetQuotes?${params.toString()}`;
 
   try {
-    const res = await fetchWithRetry(url, { headers: { 'Accept': 'application/json' } }, 8000, 2, 1000);
+    const res = await fetchWithRetry(url, { headers: { 'Accept': 'application/json' } }, 10000, 2, 1000);
     if (res.status !== 200) {
       logger.warn(`[Quotes] TipRanks returned status ${res.status} for ${uniqueTickers.join(',')}`);
       return {};

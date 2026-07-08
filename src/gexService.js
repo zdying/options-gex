@@ -150,6 +150,9 @@ async function getTickerSpot(ticker) {
 async function getTickerSpotLive(ticker) {
   const uppercaseTicker = String(ticker || '').toUpperCase();
   const quotePrices = await fetchQuotePrices([uppercaseTicker]);
+
+  logger.info(`[LiveSpot] Fetched live spot price for ${uppercaseTicker}:`, quotePrices[uppercaseTicker]);
+
   return quotePrices[uppercaseTicker] || getTickerSpot(uppercaseTicker);
 }
 
@@ -590,14 +593,15 @@ async function updateChainAndRecalculate(ticker) {
   let chainData = null;
   try {
     chainData = await datacenter.fetchLiveChain(ticker);
-    const prunedChainData = pruneOptionChain(chainData, state.spot, todayStr);
-    const timeStr = getEstTime().timeStrCompact.substring(0, 4);
-    const snapDir = paths.optionSnapshotsDir(todayStr, ticker);
-    if (!fs.existsSync(snapDir)) {
-      await fs.promises.mkdir(snapDir, { recursive: true });
-    }
-    const snapPath = paths.optionSnapshotPath(todayStr, ticker, timeStr);
-    await fs.promises.writeFile(snapPath, JSON.stringify(prunedChainData, null, 2));
+    // Snapshot persistence disabled: live chain data is only needed for in-memory recalculation.
+    // const prunedChainData = pruneOptionChain(chainData, state.spot, todayStr);
+    // const timeStr = getEstTime().timeStrCompact.substring(0, 4);
+    // const snapDir = paths.optionSnapshotsDir(todayStr, ticker);
+    // if (!fs.existsSync(snapDir)) {
+    //   await fs.promises.mkdir(snapDir, { recursive: true });
+    // }
+    // const snapPath = paths.optionSnapshotPath(todayStr, ticker, timeStr);
+    // await fs.promises.writeFile(snapPath, JSON.stringify(prunedChainData, null, 2));
   } catch (err) {
     logger.error(`[LiveChain] Error fetching options chain for ${ticker}:`, err.message);
   }
