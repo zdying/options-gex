@@ -487,11 +487,8 @@ function renderReplayFrame() {
 
   if (gravityMap && gravityChart) {
     const displayMap = getDisplayGravityMap(gravityMap, gravityChart);
-    const smoothData = smoothGravityData(
-      displayMap.strikes,
-      displayMap.liveGravityCurve,
-      displayMap.openingGravityCurve
-    );
+    const liveGravityPoints = getGravityPoints(displayMap.strikes, displayMap.liveGravityCurve);
+    const openingGravityPoints = getGravityPoints(displayMap.strikes, displayMap.openingGravityCurve);
     gravityChart.$rawGravityData = {
       strikes: displayMap.strikes,
       liveGravityCurve: displayMap.liveGravityCurve,
@@ -500,17 +497,17 @@ function renderReplayFrame() {
     gravityChart.data.labels = [];
 
     // Dataset 0: 实时引力
-    gravityChart.data.datasets[0].data = smoothData.liveGravityCurve;
-    gravityChart.data.datasets[0].pointBackgroundColor = smoothData.liveGravityCurve.map(() => 'rgba(255, 42, 95, 1)');
-    gravityChart.data.datasets[0].pointBorderColor = smoothData.liveGravityCurve.map(() => 'rgba(255, 42, 95, 0.3)');
+    gravityChart.data.datasets[0].data = liveGravityPoints;
+    gravityChart.data.datasets[0].pointBackgroundColor = liveGravityPoints.map(() => 'rgba(255, 42, 95, 1)');
+    gravityChart.data.datasets[0].pointBorderColor = liveGravityPoints.map(() => 'rgba(255, 42, 95, 0.3)');
 
     // Dataset 1: 开盘引力
-    gravityChart.data.datasets[1].data = smoothData.openingGravityCurve;
-    gravityChart.data.datasets[1].pointBackgroundColor = smoothData.openingGravityCurve.map(() => 'rgba(156, 163, 175, 0.85)');
-    gravityChart.data.datasets[1].pointBorderColor = smoothData.openingGravityCurve.map(() => 'rgba(156, 163, 175, 0.25)');
+    gravityChart.data.datasets[1].data = openingGravityPoints;
+    gravityChart.data.datasets[1].pointBackgroundColor = openingGravityPoints.map(() => 'rgba(156, 163, 175, 0.85)');
+    gravityChart.data.datasets[1].pointBorderColor = openingGravityPoints.map(() => 'rgba(156, 163, 175, 0.25)');
 
     gravityChart.options.plugins.verticalLines = [
-      { value: point.spot, color: 'rgba(255, 204, 0, 0.5)', lineWidth: 1, dash: [4, 4], label: 'Spot', offset: 12 },
+      { value: point.spot, color: 'rgba(245, 158, 11, 0.95)', lineWidth: 1, dash: [4, 4], label: 'Spot', offset: 12 },
       { value: gravityMap.upperGravity, color: 'rgba(156, 163, 175, 0.45)', lineWidth: 1, label: `上方引力位 (${gravityMap.upperGravity || '无'})`, offset: 35 },
       { value: gravityMap.lowerGravity, color: 'rgba(255, 42, 95, 0.45)', lineWidth: 1, label: `下方引力位 (${gravityMap.lowerGravity || '无'})`, offset: 55 },
       { value: gravityMap.gravityAxis, color: 'rgba(255, 255, 255, 0.35)', lineWidth: 1, dash: [2, 2], label: `引力中轴 (${gravityMap.gravityAxis || '无'})`, offset: 75 }
@@ -536,47 +533,15 @@ function renderReplayFrame() {
   }
 }
 
-function catmullRomInterpolate(xs, ys, samplesPerSegment = 10) {
-  if (!Array.isArray(xs) || !Array.isArray(ys) || xs.length !== ys.length || xs.length < 3) {
-    return (xs || []).map((x, i) => ({ x, y: ys[i] || 0 }));
-  }
+function getGravityPoints(strikes, values) {
+  if (!Array.isArray(strikes) || !Array.isArray(values)) return [];
 
-  const points = [];
-  for (let i = 0; i < xs.length - 1; i++) {
-    const y0 = ys[Math.max(0, i - 1)];
-    const y1 = ys[i];
-    const y2 = ys[i + 1];
-    const y3 = ys[Math.min(ys.length - 1, i + 2)];
-    const x1 = xs[i];
-    const x2 = xs[i + 1];
-
-    for (let step = 0; step < samplesPerSegment; step++) {
-      const t = step / samplesPerSegment;
-      const t2 = t * t;
-      const t3 = t2 * t;
-      const y = 0.5 * (
-        (2 * y1) +
-        (-y0 + y2) * t +
-        (2 * y0 - 5 * y1 + 4 * y2 - y3) * t2 +
-        (-y0 + 3 * y1 - 3 * y2 + y3) * t3
-      );
-      points.push({
-        x: x1 + (x2 - x1) * t,
-        y
-      });
-    }
-  }
-
-  points.push({ x: xs[xs.length - 1], y: ys[ys.length - 1] });
-  return points;
-}
-
-function smoothGravityData(strikes, liveGravityCurve, openingGravityCurve) {
-  const xs = (strikes || []).map(Number);
-  return {
-    liveGravityCurve: catmullRomInterpolate(xs, liveGravityCurve || []),
-    openingGravityCurve: catmullRomInterpolate(xs, openingGravityCurve || [])
-  };
+  return strikes
+    .map((strike, index) => ({
+      x: Number(strike),
+      y: Number(values[index]) || 0
+    }))
+    .filter(point => Number.isFinite(point.x));
 }
 
 function getRangeLabel(range) {
@@ -731,7 +696,8 @@ function initCharts() {
           yAxisID: 'y',
           borderColor: 'rgba(255, 42, 95, 1)',
           borderWidth: context => getGravityLiveLineWidth(context.chart),
-          tension: 0,
+          tension: 0.3,
+          cubicInterpolationMode: 'monotone',
           borderCapStyle: 'round',
           borderJoinStyle: 'round',
           pointRadius: 0,
@@ -748,7 +714,8 @@ function initCharts() {
           borderColor: 'rgba(156, 163, 175, 0.85)',
           borderWidth: 1.35,
           borderDash: [5, 5],
-          tension: 0,
+          tension: 0.35,
+          cubicInterpolationMode: 'monotone',
           borderCapStyle: 'round',
           borderJoinStyle: 'round',
           pointRadius: 0,
@@ -958,11 +925,8 @@ function updateCharts() {
       if (!gravityChart) return;
 
       const displayMap = getDisplayGravityMap(data, gravityChart);
-      const smoothData = smoothGravityData(
-        displayMap.strikes,
-        displayMap.liveGravityCurve,
-        displayMap.openingGravityCurve
-      );
+      const liveGravityPoints = getGravityPoints(displayMap.strikes, displayMap.liveGravityCurve);
+      const openingGravityPoints = getGravityPoints(displayMap.strikes, displayMap.openingGravityCurve);
       gravityChart.$rawGravityData = {
         strikes: displayMap.strikes,
         liveGravityCurve: displayMap.liveGravityCurve,
@@ -971,18 +935,18 @@ function updateCharts() {
       gravityChart.data.labels = [];
 
       // Dataset 0: 实时引力
-      gravityChart.data.datasets[0].data = smoothData.liveGravityCurve;
-      gravityChart.data.datasets[0].pointBackgroundColor = smoothData.liveGravityCurve.map(() => 'rgba(255, 42, 95, 1)');
-      gravityChart.data.datasets[0].pointBorderColor = smoothData.liveGravityCurve.map(() => 'rgba(255, 42, 95, 0.3)');
+      gravityChart.data.datasets[0].data = liveGravityPoints;
+      gravityChart.data.datasets[0].pointBackgroundColor = liveGravityPoints.map(() => 'rgba(255, 42, 95, 1)');
+      gravityChart.data.datasets[0].pointBorderColor = liveGravityPoints.map(() => 'rgba(255, 42, 95, 0.3)');
 
       // Dataset 1: 开盘引力
-      gravityChart.data.datasets[1].data = smoothData.openingGravityCurve;
-      gravityChart.data.datasets[1].pointBackgroundColor = smoothData.openingGravityCurve.map(() => 'rgba(156, 163, 175, 0.85)');
-      gravityChart.data.datasets[1].pointBorderColor = smoothData.openingGravityCurve.map(() => 'rgba(156, 163, 175, 0.25)');
+      gravityChart.data.datasets[1].data = openingGravityPoints;
+      gravityChart.data.datasets[1].pointBackgroundColor = openingGravityPoints.map(() => 'rgba(156, 163, 175, 0.85)');
+      gravityChart.data.datasets[1].pointBorderColor = openingGravityPoints.map(() => 'rgba(156, 163, 175, 0.25)');
 
       const currentSpot = parseFloat(spotVal.textContent.replace('$', ''));
       gravityChart.options.plugins.verticalLines = [
-        { value: currentSpot, color: 'rgba(255, 204, 0, 0.5)', lineWidth: 1, dash: [4, 4], label: 'Spot', offset: 12 },
+        { value: currentSpot, color: 'rgba(245, 158, 11, 0.95)', lineWidth: 1, dash: [4, 4], label: 'Spot', offset: 12 },
         { value: data.upperGravity, color: 'rgba(156, 163, 175, 0.45)', lineWidth: 1, label: `上方引力位 (${data.upperGravity || '无'})`, offset: 35 },
         { value: data.lowerGravity, color: 'rgba(255, 42, 95, 0.45)', lineWidth: 1, label: `下方引力位 (${data.lowerGravity || '无'})`, offset: 55 },
         { value: data.gravityAxis, color: 'rgba(255, 255, 255, 0.35)', lineWidth: 1, dash: [2, 2], label: `引力中轴 (${data.gravityAxis || '无'})`, offset: 75 }
