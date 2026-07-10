@@ -9,6 +9,8 @@ const logger = require('./utils/logger')('data');
 
 dns.setDefaultResultOrder('ipv4first');
 
+logger.info(`Using Benzinga Token: ${env.BENZINGA_COOKIE}`);
+
 /**
  * 辅助工具：带超时控制与失败重试机制的 fetch 请求，支持 Connection: close 避免 keep-alive 假死
  */
@@ -80,6 +82,8 @@ async function fetchLiveTrades(lastUpdatedCursor) {
     'parameters[dateSearchField]': 'target'
   });
   const url = `https://api.benzinga.com/api/v1/signal/option_activity?${params.toString()}`;
+
+  logger.debug(`[Trades] Fetching live trades with cursor ${lastUpdatedCursor}, cookie: ${env.BENZINGA_COOKIE}`);
 
   const response = await fetchWithRetry(url, {
     headers: {

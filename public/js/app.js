@@ -424,6 +424,7 @@ function startLocalReplayTimer() {
 
   // 60倍速 -> 1秒(1000ms) 走 60秒(1分钟)
   // 120倍速 -> 500ms 走 1分钟
+  // 180倍速 -> 333ms 走 1分钟
   // 300倍速 -> 200ms 走 1分钟
   const tickMs = Math.max(50, 60000 / replaySpeed);
   replayTimer = setInterval(() => {

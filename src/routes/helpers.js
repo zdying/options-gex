@@ -66,6 +66,20 @@ function getLatestTradesCountForTicker(ticker) {
   return Array.isArray(trades) ? trades.length : 0;
 }
 
+function has0DteData(state) {
+  const zeroDteMatrix = state && state.matrixViews && state.matrixViews['0dte'];
+  if (Array.isArray(zeroDteMatrix) && zeroDteMatrix.length > 0) {
+    return true;
+  }
+
+  const zeroDteSummary = state && state.gexSummary && state.gexSummary['0dte'];
+  return Boolean(
+    zeroDteSummary &&
+    Array.isArray(zeroDteSummary.strikes) &&
+    zeroDteSummary.strikes.length > 0
+  );
+}
+
 async function getClientGravityState(ticker) {
   const defaultTicker = BUILTIN_TICKERS[0] || 'SPY';
   ticker = (ticker || defaultTicker).toUpperCase();
@@ -83,6 +97,7 @@ async function getClientGravityState(ticker) {
     currentTimePct: ((state.currentTimeSeconds - 9.5 * 3600) / (6.5 * 3600)) * 100,
     spot: state.spot,
     latestMetrics: state.latestGex,
+    has0Dte: has0DteData(state),
     gravityReference
   }, ticker);
 }

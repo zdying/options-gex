@@ -182,7 +182,7 @@ function filterMatrixByExpiry(matrix, currentDateStr, expiryFilter = 'all') {
     const curDate = new Date(currentDateStr + 'T00:00:00Z');
     const diffDays = Math.round((expDate - curDate) / (1000 * 60 * 60 * 24));
     if (expiryFilter === '0dte') return diffDays === 0;
-    if (expiryFilter === 'weekly') return diffDays >= 1 && diffDays <= 5;
+    if (expiryFilter === 'weekly') return diffDays >= 0 && diffDays <= 5;
     return true;
   });
 }

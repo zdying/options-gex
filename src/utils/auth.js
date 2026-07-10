@@ -5,6 +5,9 @@ const logger = require('./logger')('auth');
 
 let proPlusUsers = null;
 let loadingUsers = null;
+let proPlusUsersLoadedAt = 0;
+
+const PRO_PLUS_USERS_CACHE_TTL_MS = 5 * 60 * 1000;
 
 function getBearerToken(req) {
   const header = req.headers.authorization || req.headers.Authorization || '';
@@ -12,7 +15,10 @@ function getBearerToken(req) {
 }
 
 async function getProPlusUsers() {
-  if (proPlusUsers) {
+  const hasCache = Array.isArray(proPlusUsers);
+  const cacheExpired = !hasCache || Date.now() - proPlusUsersLoadedAt > PRO_PLUS_USERS_CACHE_TTL_MS;
+
+  if (hasCache && !cacheExpired) {
     return proPlusUsers;
   }
 
@@ -20,11 +26,16 @@ async function getProPlusUsers() {
     loadingUsers = datacenter.fetchProPlusUsers()
       .then(users => {
         proPlusUsers = users;
-        logger.info(`[Auth] Loaded ${users.length} pro+ users.`);
+        proPlusUsersLoadedAt = Date.now();
+        logger.info(`[Auth] Loaded ${users.length} pro+ users. user list: ${JSON.stringify(users.map(u => ({ user_id: u.user_id, email: u.email })))}`);
         return proPlusUsers;
       })
       .catch(error => {
         logger.error(`[Auth] Failed to load pro+ users: ${error.message}`);
+        if (hasCache) {
+          logger.warn(`[Auth] Using stale pro+ users cache with ${proPlusUsers.length} users.`);
+          return proPlusUsers;
+        }
         throw error;
       })
       .finally(() => {

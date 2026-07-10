@@ -192,7 +192,7 @@ class PositionStore {
       if (expiryFilter === '0dte' && diffDays !== 0) {
         return null;
       }
-      if (expiryFilter === 'weekly' && (diffDays < 1 || diffDays > 5)) {
+      if (expiryFilter === 'weekly' && (diffDays < 0 || diffDays > 5)) {
         return null;
       }
 

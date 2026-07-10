@@ -90,6 +90,7 @@ function statePayload(input = {}, fallbackTicker = 'SPY') {
       currentTimePct: 0,
       speedMultiplier: 1,
       spot: 0,
+      has0Dte: false,
       latestGravity: null,
       gravityReference: null
     };
@@ -102,6 +103,7 @@ function statePayload(input = {}, fallbackTicker = 'SPY') {
     currentTimePct: Number(input.currentTimePct) || 0,
     speedMultiplier: 1,
     spot: input.spot || 0,
+    has0Dte: Boolean(input.has0Dte),
     latestGravity: toMetrics(input.latestMetrics),
     gravityReference: toReference(input.gravityReference)
   };
