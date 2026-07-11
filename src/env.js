@@ -20,4 +20,5 @@ module.exports = {
   BENZINGA_COOKIE: readToken(),
   PRO_PLUS_USERS_AUTHORIZATION: process.env.PRO_PLUS_USERS_AUTHORIZATION || 'Bearer ka_internal_M3MYTtJ60kQtKR45aJu8u6HoaVvbVjln',
   JWT_SECRET: process.env.JWT_SECRET || '4vLIrsJ16fMDL4CqM4BMn0xQcNEydF5gzQW2jePsQr7T7qmQc8RM3RqbDvKETKaY',
+  KA_SERVER_HOST: process.env.NODE_ENV === 'development' ? 'http://127.0.0.1:8787' : 'https://app.kairalert.pro'
 };

@@ -7,6 +7,7 @@ const tickerRoutes = require('./routes/tickers');
 const { isAuthorizedRequest } = require('./utils/auth');
 const logger = require('./utils/logger')('app');
 const marketScheduler = require('./marketScheduler');
+const env = require('./env');
 
 const app = express();
 const PORT = process.env.PORT || 3080;
@@ -15,7 +16,7 @@ const SSL_CERT_PATH = process.env.SSL_CERT_PATH || path.join(__dirname, '../cert
 
 app.use((req, res, next) => {
   res.setHeader('X-Powered-By', 'KA_2.0');
-  res.setHeader('Access-Control-Allow-Origin', 'https://app.kairalert.pro');
+  res.setHeader('Access-Control-Allow-Origin', env.KA_SERVER_HOST || 'https://app.kairalert.pro');
   res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   if (req.method === 'OPTIONS') {
@@ -51,6 +52,7 @@ https.createServer(httpsOptions, app).listen(PORT, () => {
   logger.info(`==========================================`);
   logger.info(`GEX Structure Engine is running at:`);
   logger.info(`https://localhost:${PORT}`);
+  logger.info(`Using KairAlert server host: ${env.KA_SERVER_HOST}`);
   logger.info(`==========================================`);
 });
 

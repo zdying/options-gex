@@ -419,6 +419,19 @@ button.danger-btn:hover {
   position: relative;
 }
 
+.chart-watermark {
+  position: absolute;
+  left: 12px;
+  bottom: 38px;
+  z-index: 2;
+  color: rgba(255, 255, 255, 0.2);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  pointer-events: none;
+  user-select: none;
+}
+
 @media (max-width: 640px) {
   .chart-wrapper {
     height: clamp(220px, 58vw, 300px);

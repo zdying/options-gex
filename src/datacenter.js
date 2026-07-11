@@ -10,6 +10,7 @@ const logger = require('./utils/logger')('data');
 dns.setDefaultResultOrder('ipv4first');
 
 logger.info(`Using Benzinga Token: ${env.BENZINGA_COOKIE}`);
+logger.info(`Using KairAlert server host: ${env.KA_SERVER_HOST}`);
 
 /**
  * 辅助工具：带超时控制与失败重试机制的 fetch 请求，支持 Connection: close 避免 keep-alive 假死
@@ -154,7 +155,9 @@ async function fetchProPlusUsers() {
     throw new Error('PRO_PLUS_USERS_AUTHORIZATION is not configured');
   }
 
-  const url = 'https://app.kairalert.pro/api/internal/pro-plus-users';
+  const host = env.KA_SERVER_HOST || 'https://app.kairalert.pro';
+  const url = `${host}/api/internal/pro-plus-users`;
+
   const response = await fetchWithRetry(url, {
     headers: {
       'Accept': 'application/json',

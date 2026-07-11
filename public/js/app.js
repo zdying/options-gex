@@ -508,10 +508,7 @@ function renderReplayFrame() {
     gravityChart.data.datasets[1].pointBorderColor = openingGravityPoints.map(() => 'rgba(156, 163, 175, 0.25)');
 
     gravityChart.options.plugins.verticalLines = [
-      { value: point.spot, color: 'rgba(245, 158, 11, 0.95)', lineWidth: 1, dash: [4, 4], label: 'Spot', offset: 12 },
-      { value: gravityMap.upperGravity, color: 'rgba(156, 163, 175, 0.45)', lineWidth: 1, label: `上方引力位 (${gravityMap.upperGravity || '无'})`, offset: 35 },
-      { value: gravityMap.lowerGravity, color: 'rgba(255, 42, 95, 0.45)', lineWidth: 1, label: `下方引力位 (${gravityMap.lowerGravity || '无'})`, offset: 55 },
-      { value: gravityMap.gravityAxis, color: 'rgba(255, 255, 255, 0.35)', lineWidth: 1, dash: [2, 2], label: `引力中轴 (${gravityMap.gravityAxis || '无'})`, offset: 75 }
+      { value: point.spot, color: 'rgba(245, 158, 11, 0.95)', lineWidth: 1, dash: [4, 4], label: 'Spot', offset: 12 }
     ];
     gravityChart.update('none');
   }
@@ -947,10 +944,7 @@ function updateCharts() {
 
       const currentSpot = parseFloat(spotVal.textContent.replace('$', ''));
       gravityChart.options.plugins.verticalLines = [
-        { value: currentSpot, color: 'rgba(245, 158, 11, 0.95)', lineWidth: 1, dash: [4, 4], label: 'Spot', offset: 12 },
-        { value: data.upperGravity, color: 'rgba(156, 163, 175, 0.45)', lineWidth: 1, label: `上方引力位 (${data.upperGravity || '无'})`, offset: 35 },
-        { value: data.lowerGravity, color: 'rgba(255, 42, 95, 0.45)', lineWidth: 1, label: `下方引力位 (${data.lowerGravity || '无'})`, offset: 55 },
-        { value: data.gravityAxis, color: 'rgba(255, 255, 255, 0.35)', lineWidth: 1, dash: [2, 2], label: `引力中轴 (${data.gravityAxis || '无'})`, offset: 75 }
+        { value: currentSpot, color: 'rgba(245, 158, 11, 0.95)', lineWidth: 1, dash: [4, 4], label: 'Spot', offset: 12 }
       ];
 
       gravityChart.update('none');
