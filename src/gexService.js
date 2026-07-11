@@ -16,6 +16,10 @@ const {
   getOptionGroupExpiration,
   isExpirationWithinDays
 } = require('./utils/sharedUtils');
+const {
+  inferUnderlyingPrice,
+  buildExpiryViews
+} = require('./utils/optionChainAnalysisUtils');
 const pricingConfig = require('./pricingConfig');
 const logger = require('./utils/logger')('gex');
 
@@ -67,52 +71,6 @@ BUILTIN_TICKERS.forEach(ticker => {
 
 function getDividendYield(ticker) {
   return pricingConfig.dividendYieldByTicker[String(ticker || '').toUpperCase()] || 0;
-}
-
-/**
- * 根据平价公式 (Put-Call Parity) 从期权链的报价中高精度反推标的资产的股价 S
- */
-function inferUnderlyingPrice(chainData) {
-  if (!chainData || !chainData.optionChains || chainData.optionChains.length === 0) {
-    return null;
-  }
-  const tickerChain = chainData.optionChains[0];
-  if (!tickerChain || !tickerChain.chains || tickerChain.chains.length === 0) {
-    return null;
-  }
-
-  const group = tickerChain.chains[0];
-  const calls = group.calls || [];
-  const puts = group.puts || [];
-
-  const putMap = {};
-  puts.forEach(p => {
-    putMap[p.strike] = p;
-  });
-
-  const spotEstimates = [];
-  calls.forEach(c => {
-    const k = c.strike;
-    const p = putMap[k];
-    if (p) {
-      if (c.bidPrice > 0 && c.askPrice > 0 && p.bidPrice > 0 && p.askPrice > 0) {
-        const C = (c.bidPrice + c.askPrice) / 2;
-        const P = (p.bidPrice + p.askPrice) / 2;
-        const S = C - P + k;
-        spotEstimates.push(S);
-      }
-    }
-  });
-
-  if (spotEstimates.length === 0) {
-    return null;
-  }
-
-  spotEstimates.sort((a, b) => a - b);
-  const mid = Math.floor(spotEstimates.length / 2);
-  return spotEstimates.length % 2 !== 0
-    ? spotEstimates[mid]
-    : (spotEstimates[mid - 1] + spotEstimates[mid]) / 2;
 }
 
 /**
@@ -173,26 +131,6 @@ function getStrikesAroundSpot(sortedStrikes, spot, radius = 10) {
   const startIdx = Math.max(0, closestIdx - radius);
   const endIdx = Math.min(sortedStrikes.length - 1, closestIdx + radius);
   return sortedStrikes.slice(startIdx, endIdx + 1);
-}
-
-function filterMatrixByExpiry(matrix, currentDateStr, expiryFilter = 'all') {
-  if (expiryFilter === 'all') return matrix || [];
-  return (matrix || []).filter(contract => {
-    const expDate = new Date(contract.expiration + 'T00:00:00Z');
-    const curDate = new Date(currentDateStr + 'T00:00:00Z');
-    const diffDays = Math.round((expDate - curDate) / (1000 * 60 * 60 * 24));
-    if (expiryFilter === '0dte') return diffDays === 0;
-    if (expiryFilter === 'weekly') return diffDays >= 0 && diffDays <= 5;
-    return true;
-  });
-}
-
-function buildExpiryViews(matrix, currentDateStr) {
-  return {
-    all: matrix || [],
-    '0dte': filterMatrixByExpiry(matrix, currentDateStr, '0dte'),
-    weekly: filterMatrixByExpiry(matrix, currentDateStr, 'weekly')
-  };
 }
 
 function buildGexSummaries(matrixViews, spot) {
