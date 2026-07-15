@@ -7,29 +7,29 @@
 例如：
 
 ```text
-TSM Weekly Gravity Structure
+TSM · KairAlert Gravity Structure
 ```
 
-表示这是 TSM 的周度引力结构图。
+表示这是 TSM 的 KairAlert Gravity 周度引力结构图。
 
 标题下方通常有一行基础信息：
 
 ```text
-Base date 2026-07-10 · Spot 434.11 · downward-pull
+Base date 2026-07-10 · Spot 434.11 · Downward Pull
 ```
 
 含义如下：
 
 - `Base date 2026-07-10`：使用的是 2026-07-10 收盘后的期权数据。
 - `Spot 434.11`：当前使用的现价/基准价格是 434.11。
-- `downward-pull`：整体结构偏下方引力，也就是下方牵引更重。
+- `Downward Pull`：整体结构偏下方引力，也就是下方牵引更重。
 
 常见结构标签包括：
 
 ```text
-upward-pull
-downward-pull
-near-balanced-pull
+Upward Pull
+Downward Pull
+Near Balanced Pull
 ```
 
 分别表示上方引力更重、下方引力更重、上下引力接近均衡。
@@ -95,24 +95,21 @@ Up 34.44%
 当前期权结构里，现价下方的牵引更重。
 ```
 
-横条下方还有：
+横条下方还有一行结构说明，例如：
 
 ```text
-Weighted skew -0.31 · Raw skew -0.34
+Pull structure: downside-heavy
 ```
 
-含义如下：
+这行是对红蓝横条的文字解释：
 
-- `Weighted skew`：距离加权后的上下引力偏斜。
-- `Raw skew`：不考虑距离权重的原始上下引力偏斜。
+- `Pull structure: downside-heavy`：下方引力明显更重。
+- `Pull structure: upside-heavy`：上方引力明显更重。
+- `Pull structure: balanced`：上下引力比较接近，偏拉扯。
 
-判断方式：
+这行不会展示内部计算值，只用于帮助用户快速理解当前引力偏向。
 
-```text
-负数：下方引力更重
-正数：上方引力更重
-接近 0：上下比较均衡
-```
+右上角分数已经表达整体强弱，因此这里不再显示 `Weighted skew` 或 `Raw skew` 这类内部字段。
 
 ## 4. Weighted Gravity Curve
 
@@ -211,15 +208,16 @@ Near spot
 例如：
 
 ```text
-440 (1.36%, w 0.79)
-460 (5.96%, w 0.46)
-450 (3.66%, w 0.58)
+440 (1.36%, 12.4, w 0.79)
+460 (5.96%, 7.1, w 0.46)
+450 (3.66%, 9.8, w 0.58)
 ```
 
 每一行含义：
 
 - `440`：strike 价格。
 - `1.36%`：距离现价 1.36%。
+- `12.4`：该位置的有效引力值。图中默认按百万为单位展示，但不显示 `M`。
 - `w 0.79`：距离权重是 0.79。
 
 越接近现价，距离权重通常越高。
@@ -231,9 +229,9 @@ Near spot
 例如：
 
 ```text
-420 (-3.25%, w 0.61)
-400 (-7.86%, w 0.39)
-430 (-0.95%, w 0.84)
+420 (-3.25%, 18.2, w 0.61)
+400 (-7.86%, 6.5, w 0.39)
+430 (-0.95%, 21.4, w 0.84)
 ```
 
 负的百分比表示该 strike 位于现价下方。
@@ -244,7 +242,17 @@ Near spot
 
 这个列表最适合观察短期临界区，因为它离当前价格最近。
 
-## 7. 如何读一张图
+## 7. 底部免责声明
+
+图表底部会显示：
+
+```text
+Disclaimer: For informational purposes only. Not investment advice.
+```
+
+含义是：这张图只用于市场结构观察，不构成投资建议。实际判断仍需要结合 K 线、趋势、成交量、消息和其他指标。
+
+## 8. 如何读一张图
 
 可以按下面顺序读：
 
@@ -255,7 +263,7 @@ Near spot
 5. 看 `Upper zones` 和 `Lower zones`，判断上方压力/牵引和下方支撑/吸附区。
 6. 结合蓝色峰值，判断哪些区间最容易成为价格验证位置。
 
-## 8. TSM 示例
+## 9. TSM 示例
 
 假设一张 TSM 图显示：
 
@@ -263,7 +271,7 @@ Near spot
 Spot 434.11
 Down 65.56%
 Up 34.44%
-Weighted skew -0.31
+Pull structure: downside-heavy
 4/10 Weak
 ```
 
@@ -281,7 +289,7 @@ TSM 当前现价是 `434.11`。
 TSM 当前不是极端空头结构，但下方引力明显更重；短期关键看 430，站不稳就容易往 420 区域验证，上方改善需要重新靠近并站稳 440。
 ```
 
-## 9. 重要提醒
+## 10. 重要提醒
 
 这张图不是价格预测，也不是概率图。
 

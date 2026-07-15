@@ -11,15 +11,15 @@ const path = require('path');
 
 const WIDTH = 960;
 const HEIGHT = 540;
-const CONTENT_LEFT = 48;
-const CONTENT_RIGHT = 912;
+const CONTENT_LEFT = 36;
+const CONTENT_RIGHT = 924;
 const PLOT_LEFT = CONTENT_LEFT;
 const PLOT_RIGHT = CONTENT_RIGHT;
-const PLOT_TOP = 228;
-const PLOT_BOTTOM = 360;
-const ZERO_Y = 322;
+const PLOT_TOP = 220;
+const PLOT_BOTTOM = 352;
+const ZERO_Y = 314;
 const BAR_LEFT = CONTENT_LEFT;
-const BAR_TOP = 122;
+const BAR_TOP = 114;
 const BAR_WIDTH = CONTENT_RIGHT - CONTENT_LEFT;
 const BAR_HEIGHT = 34;
 const ZONE_LIMIT = 10;
@@ -40,12 +40,18 @@ const SCORE_COLORS = [
   '#dc2626',
 ];
 const SCORE_INACTIVE_COLOR = '#e5e7eb';
+const LOGO_PATH = path.join(__dirname, 'Logo.svg');
+const LOGO_WIDTH = 78;
+const LOGO_HEIGHT = 38;
+const LOGO_OPACITY = 0.34;
+let logoInnerSvg = null;
 
 function fmt(value, digits = 2) {
   if (value === null || value === undefined) return 'N/A';
   const num = Number(value);
   if (!Number.isFinite(num)) return 'N/A';
-  return num.toFixed(digits).replace(/\.?0+$/, '');
+  if (digits === 0) return num.toFixed(0);
+  return num.toFixed(digits).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
 }
 
 function slug(value) {
@@ -98,6 +104,13 @@ function scoreLabel(score) {
   if (value < 0.12) return 'Balanced';
   if (value < 0.35) return 'Strong';
   return 'Very Strong';
+}
+
+function pullStructureLabel(score) {
+  const value = Number(score);
+  if (value <= -0.12) return 'Pull structure: downside-heavy';
+  if (value >= 0.12) return 'Pull structure: upside-heavy';
+  return 'Pull structure: balanced';
 }
 
 function polarPoint(cx, cy, radius, angleDeg) {
@@ -249,6 +262,28 @@ function svgText(x, y, text, size = 16, weight = 400, fill = '#0f172a', anchor =
   return `<text x="${x}" y="${y}" font-family="Inter, Arial, sans-serif" font-size="${size}" font-weight="${weight}" fill="${fill}" text-anchor="${anchor}">${escapeHtml(text)}</text>`;
 }
 
+function loadLogoInnerSvg() {
+  if (logoInnerSvg !== null) return logoInnerSvg;
+  if (!fs.existsSync(LOGO_PATH)) {
+    logoInnerSvg = '';
+    return logoInnerSvg;
+  }
+  logoInnerSvg = fs.readFileSync(LOGO_PATH, 'utf8')
+    .trim()
+    .replace(/^<svg\b[^>]*>/, '')
+    .replace(/<\/svg>\s*$/, '')
+    .trim();
+  return logoInnerSvg;
+}
+
+function renderLogoWatermark() {
+  const logo = loadLogoInnerSvg();
+  if (!logo) return '';
+  const x = PLOT_RIGHT - LOGO_WIDTH - 8;
+  const y = PLOT_TOP + 6;
+  return `<svg x="${x}" y="${y}" width="${LOGO_WIDTH}" height="${LOGO_HEIGHT}" viewBox="0 0 819 401" opacity="${LOGO_OPACITY}">${logo}</svg>`;
+}
+
 function renderChart(ticker, tickerData, report) {
   const window = tickerData.windows.nextWeek;
   const spot = Number(tickerData.spot);
@@ -265,14 +300,13 @@ function renderChart(ticker, tickerData, report) {
   const upperWidth = BAR_WIDTH * upperPct / 100.0;
   const lowerWidth = BAR_WIDTH - upperWidth;
   const pullSkew = Number(window.pullSkew || 0);
-  const rawSkew = Number(window.rawPullSkew || 0);
 
   const parts = [
     `<svg xmlns="http://www.w3.org/2000/svg" width="${WIDTH}" height="${HEIGHT}" viewBox="0 0 ${WIDTH} ${HEIGHT}">`,
     '<rect width="100%" height="100%" fill="#f8fafc"/>',
-    `<rect x="24" y="24" width="${WIDTH - 48}" height="${HEIGHT - 48}" rx="12" fill="#ffffff" stroke="#e2e8f0"/>`,
-    svgText(48, 62, `${ticker} Weekly Gravity Structure`, 24, 700),
-    svgText(48, 80, `Base date ${report.baseDate} · Spot ${fmt(spot)} · ${formatStructureLabel(window.structure)}`, 14, 500, '#475569'),
+    `<rect x="12" y="12" width="${WIDTH - 24}" height="${HEIGHT - 24}" rx="12" fill="#ffffff" stroke="#e2e8f0"/>`,
+    svgText(CONTENT_LEFT, 54, `${ticker} · KairAlert Gravity Structure`, 24, 700),
+    svgText(CONTENT_LEFT, 72, `Base date ${report.baseDate} · Spot ${fmt(spot)} · ${formatStructureLabel(window.structure)}`, 14, 500, '#475569'),
   ];
   parts.push(...renderScoreBadge(window.score));
 
@@ -281,9 +315,9 @@ function renderChart(ticker, tickerData, report) {
     `<rect x="${BAR_LEFT}" y="${BAR_TOP}" width="${BAR_WIDTH}" height="${BAR_HEIGHT}" rx="8" fill="#e2e8f0"/>`,
     `<rect x="${BAR_LEFT}" y="${BAR_TOP}" width="${lowerWidth}" height="${BAR_HEIGHT}" rx="8" fill="#dc2626" opacity="0.82"/>`,
     `<rect x="${BAR_LEFT + lowerWidth}" y="${BAR_TOP}" width="${upperWidth}" height="${BAR_HEIGHT}" rx="8" fill="#2563eb" opacity="0.82"/>`,
-    svgText(BAR_LEFT + 12, BAR_TOP + 23, `Down ${fmt(lowerPct)}%`, 14, 700, '#ffffff'),
-    svgText(BAR_LEFT + BAR_WIDTH - 12, BAR_TOP + 23, `Up ${fmt(upperPct)}%`, 14, 700, '#ffffff', 'end'),
-    svgText(CONTENT_LEFT, BAR_TOP + 50, `Weighted skew ${fmt(pullSkew)} · Raw skew ${fmt(rawSkew)}`, 13, 500, '#64748b'),
+    svgText(BAR_LEFT + 12, BAR_TOP + 21, `Down ${fmt(lowerPct)}%`, 14, 700, '#ffffff'),
+    svgText(BAR_LEFT + BAR_WIDTH - 12, BAR_TOP + 21, `Up ${fmt(upperPct)}%`, 14, 700, '#ffffff', 'end'),
+    svgText(CONTENT_LEFT, BAR_TOP + 50, pullStructureLabel(pullSkew), 13, 600, '#64748b'),
   );
 
   const weightedPath = buildWeightedAreaPath(curvePoints, low, high, maxWeighted);
@@ -294,13 +328,14 @@ function renderChart(ticker, tickerData, report) {
   const spotLabelAnchor = spotLabelX >= PLOT_RIGHT - 8 ? 'end' : 'start';
 
   parts.push(
-    svgText(CONTENT_LEFT, 204, 'Weighted gravity curve', 14, 700, '#334155'),
-    svgText(CONTENT_RIGHT, 204, 'Filled Curve = Effective Pull · Thin Line = Signed Structure', 12, 500, '#64748b', 'end'),
+    svgText(CONTENT_LEFT, 196, 'Weighted gravity curve', 14, 700, '#334155'),
+    svgText(CONTENT_RIGHT, 196, 'Filled Curve = Effective Pull · Thin Line = Signed Structure', 12, 500, '#64748b', 'end'),
     `<rect x="${PLOT_LEFT}" y="${PLOT_TOP}" width="${PLOT_RIGHT - PLOT_LEFT}" height="${PLOT_BOTTOM - PLOT_TOP}" rx="8" fill="#f8fafc" stroke="#e2e8f0"/>`,
     `<line x1="${PLOT_LEFT}" y1="${ZERO_Y}" x2="${PLOT_RIGHT}" y2="${ZERO_Y}" stroke="#cbd5e1" stroke-width="1.5"/>`,
     `<path d="${weightedPath}" fill="#60a5fa" opacity="0.24"/>`,
     `<path d="${weightedLine}" fill="none" stroke="#2563eb" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>`,
     `<path d="${netLine}" fill="none" stroke="#475569" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" opacity="0.72"/>`,
+    renderLogoWatermark(),
     `<line x1="${spotX}" y1="${PLOT_TOP - 4}" x2="${spotX}" y2="${PLOT_BOTTOM + 24}" stroke="${SPOT_COLOR}" stroke-width="2.2" stroke-dasharray="5 5"/>`,
     svgText(spotLabelX, PLOT_TOP + 16, `Spot ${fmt(spot)}`, 13, 800, SPOT_COLOR, spotLabelAnchor),
     svgText(PLOT_LEFT, PLOT_BOTTOM + 22, fmt(low), 12, 500, '#64748b', 'start'),
@@ -322,14 +357,16 @@ function renderChart(ticker, tickerData, report) {
   });
 
   parts.push(
-    svgText(CONTENT_LEFT, 420, 'Upper zones', 14, 700, '#2563eb'),
-    svgText(352, 420, 'Lower zones', 14, 700, '#dc2626'),
-    svgText(656, 420, 'Near spot', 14, 700, '#334155'),
+    svgText(CONTENT_LEFT, 412, 'Upper zones', 14, 700, '#2563eb'),
+    svgText(348, 412, 'Lower zones', 14, 700, '#dc2626'),
+    svgText(660, 412, 'Near spot', 14, 700, '#334155'),
   );
 
-  drawZoneList(parts, CONTENT_LEFT, 444, (window.upperGravityZones || []).slice(0, 3), '#2563eb');
-  drawZoneList(parts, 352, 444, (window.lowerGravityZones || []).slice(0, 3), '#dc2626');
-  drawZoneList(parts, 656, 444, (window.nearGravityZones || []).slice(0, 3), '#334155');
+  drawZoneList(parts, CONTENT_LEFT, 436, (window.upperGravityZones || []).slice(0, 3), '#2563eb');
+  drawZoneList(parts, 348, 436, (window.lowerGravityZones || []).slice(0, 3), '#dc2626');
+  drawZoneList(parts, 660, 436, (window.nearGravityZones || []).slice(0, 3), '#334155');
+
+  parts.push(svgText(CONTENT_LEFT, 508, 'Disclaimer: For informational purposes only. Not investment advice.', 11, 650, '#ea580c'));
 
   parts.push('</svg>');
   return parts.join('\n');
@@ -403,7 +440,7 @@ function drawZoneList(parts, x, y, zones, color) {
     return;
   }
   zones.forEach((zone, idx) => {
-    const yy = y + idx * 24;
+    const yy = y + idx * 21;
     const strike = fmt(zone.strike);
     const distance = fmt(zone.distancePct);
     const weight = fmt(zone.distanceWeight, 2);

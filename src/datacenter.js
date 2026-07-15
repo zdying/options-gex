@@ -15,7 +15,7 @@ logger.info(`Using KairAlert server host: ${env.KA_SERVER_HOST}`);
 /**
  * 辅助工具：带超时控制与失败重试机制的 fetch 请求，支持 Connection: close 避免 keep-alive 假死
  */
-async function fetchWithRetry(url, options = {}, timeout = 20000, maxRetries = 3, delay = 2000) {
+async function fetchWithRetry(url, options = {}, timeout = 20000, maxRetries = 3, delay = 500) {
   if (!options.headers) {
     options.headers = {};
   }

@@ -134,10 +134,32 @@ nearGravityZones
 每一行格式是：
 
 ```text
-strike (distancePct%, w distanceWeight)
+strike (distancePct%, weightedGravity, w distanceWeight)
 ```
 
 这些表格是对应类别里最重要引力区的摘要。
+
+`weightedGravity` 默认按百万为单位展示，但不显示 `M`，避免图上暴露过多底层量纲。
+
+## Pull structure 文案
+
+红蓝分布条下方不会展示内部的 `Weighted skew / Raw skew` 数值，而是展示用户更容易理解的结构说明：
+
+```text
+Pull structure: downside-heavy
+Pull structure: upside-heavy
+Pull structure: balanced
+```
+
+该文案由 `window.pullSkew` 自动映射：
+
+```text
+pullSkew <= -0.12  -> downside-heavy
+pullSkew >=  0.12  -> upside-heavy
+otherwise          -> balanced
+```
+
+这只是展示文案的转换，不改变底层评分和分析逻辑。
 
 ## 右上角评分环
 
@@ -197,4 +219,3 @@ Weak / Balanced / Strong / Very Strong
 
 完整 strike 数据仍然保存在 `report.json` 的 `gravityCurve` 中。  
 如果未来需要展示某个价格窗口内的完整逐 strike 分布图，应该直接从 `gravityCurve` 渲染，而不是使用当前的关键 zones 合并结果。
-

@@ -45,6 +45,11 @@ SCORE_COLORS = [
     "#dc2626",
 ]
 SCORE_INACTIVE_COLOR = "#e5e7eb"
+LOGO_PATH = os.path.join(os.path.dirname(__file__), "Logo.svg")
+LOGO_WIDTH = 78
+LOGO_HEIGHT = 38
+LOGO_OPACITY = 0.34
+LOGO_INNER_SVG = None
 
 
 def fmt(value, digits=2):
@@ -257,6 +262,33 @@ def svg_text(x, y, text, size=16, weight=400, fill="#0f172a", anchor="start"):
     )
 
 
+def load_logo_inner_svg():
+    global LOGO_INNER_SVG
+    if LOGO_INNER_SVG is not None:
+        return LOGO_INNER_SVG
+    if not os.path.exists(LOGO_PATH):
+        LOGO_INNER_SVG = ""
+        return LOGO_INNER_SVG
+    with open(LOGO_PATH, "r", encoding="utf-8") as f:
+        svg = f.read().strip()
+    svg = re.sub(r"^<svg\b[^>]*>", "", svg, count=1).strip()
+    svg = re.sub(r"</svg>\s*$", "", svg, count=1).strip()
+    LOGO_INNER_SVG = svg
+    return LOGO_INNER_SVG
+
+
+def render_logo_watermark():
+    logo = load_logo_inner_svg()
+    if not logo:
+        return ""
+    x = PLOT_RIGHT - LOGO_WIDTH - 8
+    y = PLOT_TOP + 6
+    return (
+        f'<svg x="{x}" y="{y}" width="{LOGO_WIDTH}" height="{LOGO_HEIGHT}" '
+        f'viewBox="0 0 819 401" opacity="{LOGO_OPACITY}">{logo}</svg>'
+    )
+
+
 def render_chart(ticker, ticker_data, report):
     window = ticker_data["windows"]["nextWeek"]
     spot = float(ticker_data["spot"])
@@ -311,6 +343,7 @@ def render_chart(ticker, ticker_data, report):
         f'<path d="{weighted_path}" fill="#60a5fa" opacity="0.24"/>',
         f'<path d="{weighted_line}" fill="none" stroke="#2563eb" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>',
         f'<path d="{net_line}" fill="none" stroke="#475569" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" opacity="0.72"/>',
+        render_logo_watermark(),
         f'<line x1="{spot_x}" y1="{PLOT_TOP - 4}" x2="{spot_x}" y2="{PLOT_BOTTOM + 24}" stroke="{SPOT_COLOR}" stroke-width="2.2" stroke-dasharray="5 5"/>',
         svg_text(spot_label_x, PLOT_TOP + 16, f"Spot {fmt(spot)}", 13, 800, SPOT_COLOR, spot_label_anchor),
         svg_text(PLOT_LEFT, PLOT_BOTTOM + 22, fmt(low), 12, 500, "#64748b", "start"),

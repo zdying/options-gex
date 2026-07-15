@@ -330,24 +330,30 @@ async function runWeeklyGravityAnalysis() {
 }
 
 function renderCharts(reportPath, outputDir) {
-  const scriptPath = path.join(__dirname, '../scripts/render_weekly_gravity_charts.js');
-  const result = spawnSync(process.execPath, [scriptPath, reportPath, outputDir], {
-    encoding: 'utf8'
+  const scriptPaths = [
+    path.join(__dirname, '../scripts/render_weekly_gravity_charts.js'),
+    path.join(__dirname, '../scripts/render_weekly_market_overview.js')
+  ];
+
+  scriptPaths.forEach(scriptPath => {
+    const result = spawnSync(process.execPath, [scriptPath, reportPath, outputDir], {
+      encoding: 'utf8'
+    });
+
+    if (result.error) {
+      logInfo(`Chart rendering skipped: ${path.basename(scriptPath)}: ${result.error.message}`);
+      return;
+    }
+
+    if (result.stdout) {
+      result.stdout.trim().split('\n').forEach(line => logInfo(line));
+    }
+
+    if (result.status !== 0) {
+      const details = result.stderr ? result.stderr.trim() : `exit code ${result.status}`;
+      logInfo(`Chart rendering failed (${path.basename(scriptPath)}): ${details}`);
+    }
   });
-
-  if (result.error) {
-    logInfo(`Chart rendering skipped: ${result.error.message}`);
-    return;
-  }
-
-  if (result.stdout) {
-    result.stdout.trim().split('\n').forEach(line => logInfo(line));
-  }
-
-  if (result.status !== 0) {
-    const details = result.stderr ? result.stderr.trim() : `exit code ${result.status}`;
-    logInfo(`Chart rendering failed: ${details}`);
-  }
 }
 
 function analyzeGravityDistribution(matrix, spot) {
