@@ -6,11 +6,23 @@
 const dns = require('dns');
 const env = require('./env');
 const logger = require('./utils/logger')('data');
+const { getEstDate } = require('./utils/timeUtils');
+const { fetchOptionChainUntilExpiration } = require('./benzingaOptionChainStream');
 
 dns.setDefaultResultOrder('ipv4first');
 
 logger.info(`Using Benzinga Token: ${env.BENZINGA_COOKIE}`);
 logger.info(`Using KairAlert server host: ${env.KA_SERVER_HOST}`);
+
+const OPTION_CHAIN_TIMEOUT_MS = 20000;
+const OPTION_CHAIN_MAX_RETRIES = 3;
+const OPTION_CHAIN_RETRY_DELAY_MS = 500;
+const OPTION_CHAIN_DEFAULT_MAX_DAYS = 14;
+const BENZINGA_OPTIONCHAIN_HEADERS = {
+  'Accept': 'application/json',
+  'Connection': 'close',
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+};
 
 /**
  * 辅助工具：带超时控制与失败重试机制的 fetch 请求，支持 Connection: close 避免 keep-alive 假死
@@ -44,31 +56,80 @@ async function fetchWithRetry(url, options = {}, timeout = 20000, maxRetries = 3
   }
 }
 
+function addDaysToDateString(dateStr, days) {
+  const date = new Date(`${dateStr}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  const yyyy = date.getUTCFullYear();
+  const mm = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(date.getUTCDate()).padStart(2, '0');
+  return `${yyyy}${mm}${dd}`;
+}
+
+function getOptionChainTargetMmy(options = {}) {
+  if (options.targetMmy) {
+    return options.targetMmy;
+  }
+  const maxDays = Number.isFinite(options.maxDays)
+    ? options.maxDays
+    : OPTION_CHAIN_DEFAULT_MAX_DAYS;
+  return addDaysToDateString(getEstDate(), maxDays);
+}
+
 /**
  * 拉取指定标的的 Benzinga 期权链数据
  * @param {string} ticker
  * @returns {Promise<any>}
  */
-async function fetchOptionChain(ticker) {
-  const url = `https://data-api.benzinga.com/rest/v1/optionchain?apikey=${env.BENZINGA_API_KEY}&symbols=${ticker.toUpperCase()}`;
-  const response = await fetchWithRetry(url, {
-    headers: {
-      'Accept': 'application/json',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+async function fetchOptionChain(ticker, options = {}) {
+  const uppercaseTicker = ticker.toUpperCase();
+  const targetMmy = getOptionChainTargetMmy(options);
+  const timeout = options.timeoutMs || OPTION_CHAIN_TIMEOUT_MS;
+  const maxRetries = options.maxRetries || OPTION_CHAIN_MAX_RETRIES;
+  const retryDelay = options.retryDelayMs || OPTION_CHAIN_RETRY_DELAY_MS;
+
+  for (let i = 0; i < maxRetries; i++) {
+    const startedAt = Date.now();
+    let responseAt = startedAt;
+    let chainContentLength = 0;
+
+    try {
+      const result = await fetchOptionChainUntilExpiration({
+        symbol: uppercaseTicker,
+        targetMmy,
+        timeoutMs: timeout,
+        headers: BENZINGA_OPTIONCHAIN_HEADERS,
+        fetchImpl: async (url, fetchOptions) => {
+          const response = await fetch(url, fetchOptions);
+          responseAt = Date.now();
+          chainContentLength = Number(response.headers.get('content-length')) || 0;
+          return response;
+        }
+      });
+
+      if (options.metrics) {
+        options.metrics.chainHttp = responseAt - startedAt;
+        options.metrics.chainContentLength = chainContentLength;
+        options.metrics.chainReadBody = Date.now() - responseAt;
+        options.metrics.chainJsonParse = result.meta.jsonParseMs || 0;
+        options.metrics.chainBodyBytes = result.meta.readBytes || 0;
+      }
+      return result.data;
+    } catch (error) {
+      if (i === maxRetries - 1) {
+        throw error;
+      }
+      logger.warn(`[API] Stream optionchain failed/timeout for ${uppercaseTicker}. Retrying in ${retryDelay}ms... (${i + 1}/${maxRetries})`);
+      await new Promise(resolve => setTimeout(resolve, retryDelay));
     }
-  }, 20000);
-  if (response.status !== 200) {
-    throw new Error(`Benzinga optionchain returned status ${response.status}`);
   }
-  return response.json();
 }
 
-async function fetchOpeningChain(ticker) {
-  return fetchOptionChain(ticker);
+async function fetchOpeningChain(ticker, options = {}) {
+  return fetchOptionChain(ticker, options);
 }
 
-async function fetchLiveChain(ticker) {
-  return fetchOptionChain(ticker);
+async function fetchLiveChain(ticker, options = {}) {
+  return fetchOptionChain(ticker, options);
 }
 
 /**

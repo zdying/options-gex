@@ -15,6 +15,17 @@ const {
 } = require('./utils/sharedUtils');
 const pricingConfig = require('./pricingConfig');
 
+const IV_PRICE_INVALIDATE_ABS = 0.01;
+const IV_PRICE_INVALIDATE_PCT = 0.005;
+
+function shouldInvalidateIvPrice(oldPrice, newPrice) {
+  if (!Number.isFinite(oldPrice) || oldPrice <= 0) return true;
+  if (!Number.isFinite(newPrice) || newPrice <= 0) return true;
+  const absDiff = Math.abs(newPrice - oldPrice);
+  const pctDiff = absDiff / Math.max(Math.abs(oldPrice), 0.01);
+  return absDiff >= IV_PRICE_INVALIDATE_ABS && pctDiff >= IV_PRICE_INVALIDATE_PCT;
+}
+
 class PositionStore {
   constructor(config = {}) {
     // 内存持仓字典：{ [ticker]: { [optionSymbol]: optionContractObject } }
@@ -176,8 +187,28 @@ class PositionStore {
     const effectiveR = r !== undefined ? r : this.riskFreeRate;
     const q = this._getDividendYield(uppercaseTicker);
     const matrix = this.getPositionMatrix(ticker);
+    const metrics = greeksConfig && greeksConfig.metrics;
+    if (metrics) {
+      metrics.matrixInputContracts = matrix.length;
+      metrics.matrixIncludedContracts = 0;
+      metrics.ivRealtimeCalcs = 0;
+      metrics.ivGlobalCalcs = 0;
+      metrics.ivCalcMs = 0;
+      metrics.greeksCalcs = 0;
+      metrics.greeksCalcMs = 0;
+      metrics.ivSolver = {
+        totalCalls: 0,
+        seededAttempts: 0,
+        seededHits: 0,
+        seededFallbacks: 0,
+        seededIterations: 0,
+        legacyCalls: 0,
+        legacyIterations: 0,
+        initialIvSum: 0
+      };
+    }
 
-    return matrix.map(contract => {
+    const calculatedMatrix = matrix.map(contract => {
       // 过滤逻辑
       // Bug #14: 显式指定美东时区防止时区歧义
       const expDate = new Date(contract.expiration + 'T00:00:00Z');
@@ -217,15 +248,30 @@ class PositionStore {
       // 动态反推实时 IV：使用分钟级 T，供实时 GEX 使用
       let ivRealtime = contract.ivRealtime;
       if (ivRealtime === undefined || ivRealtime === null) {
-        ivRealtime = calculateImpliedVolatility(spot, contract.strike, T, effectiveR, q, marketPrice, contract.type);
+        const ivStartedAt = metrics ? Date.now() : 0;
+        ivRealtime = calculateImpliedVolatility(spot, contract.strike, T, effectiveR, q, marketPrice, contract.type, {
+          initialIV: contract.ivRealtimeSeed,
+          ivMetrics: metrics && metrics.ivSolver
+        });
+        if (metrics) {
+          metrics.ivRealtimeCalcs += 1;
+          metrics.ivCalcMs += Date.now() - ivStartedAt;
+        }
         if (isNaN(ivRealtime) || ivRealtime <= 0.0002) {
           ivRealtime = 0.20; // 实在算不出来的回退默认值为 20%，更贴近真实大盘 (SPY/QQQ) 的底噪 IV
         }
         contract.ivRealtime = ivRealtime;
+        contract.ivRealtimeSeed = ivRealtime;
+        contract.ivRealtimePrice = marketPrice;
       }
 
       // 计算实时 Greeks
+      const greeksStartedAt = metrics ? Date.now() : 0;
       const greeks = calculateBSGreeks(spot, contract.strike, T, effectiveR, q, ivRealtime, contract.type, greeksConfig);
+      if (metrics) {
+        metrics.greeksCalcs += 1;
+        metrics.greeksCalcMs += Date.now() - greeksStartedAt;
+      }
 
       const openingOI = contract.openingOI || 0;
       const flowPositionDelta = contract.flowPositionDelta || 0;
@@ -239,13 +285,29 @@ class PositionStore {
       const T_global = calculateDayT(currentDateStr, contract.expiration);
       let ivGlobal = contract.ivGlobal;
       if (ivGlobal === undefined || ivGlobal === null) {
-        ivGlobal = calculateImpliedVolatility(spot, contract.strike, T_global, effectiveR, q, marketPrice, contract.type);
+        const ivStartedAt = metrics ? Date.now() : 0;
+        ivGlobal = calculateImpliedVolatility(spot, contract.strike, T_global, effectiveR, q, marketPrice, contract.type, {
+          initialIV: contract.ivGlobalSeed,
+          ivMetrics: metrics && metrics.ivSolver
+        });
+        if (metrics) {
+          metrics.ivGlobalCalcs += 1;
+          metrics.ivCalcMs += Date.now() - ivStartedAt;
+        }
         if (isNaN(ivGlobal) || ivGlobal <= 0.0002) {
           ivGlobal = 0.20;
         }
         contract.ivGlobal = ivGlobal;
+        contract.ivGlobalSeed = ivGlobal;
+        contract.ivGlobalPrice = marketPrice;
       }
+      const globalGreeksStartedAt = metrics ? Date.now() : 0;
       const greeks_global = calculateBSGreeks(spot, contract.strike, T_global, effectiveR, q, ivGlobal, contract.type, greeksConfig);
+      if (metrics) {
+        metrics.greeksCalcs += 1;
+        metrics.greeksCalcMs += Date.now() - globalGreeksStartedAt;
+        metrics.matrixIncludedContracts += 1;
+      }
       const globalGex = globalSignedPosition * greeks_global.gamma * 100 * (spot * spot) * 0.01;
 
       return {
@@ -270,6 +332,26 @@ class PositionStore {
         globalGex
       };
     }).filter(item => item !== null);
+
+    if (metrics && metrics.ivSolver) {
+      const solver = metrics.ivSolver;
+      metrics.ivSeededAttempts = solver.seededAttempts;
+      metrics.ivSeededHits = solver.seededHits;
+      metrics.ivSeededFallbacks = solver.seededFallbacks;
+      metrics.ivSeededAvgIterations = solver.seededHits > 0
+        ? solver.seededIterations / solver.seededHits
+        : 0;
+      metrics.ivLegacyCalls = solver.legacyCalls;
+      metrics.ivLegacyAvgIterations = solver.legacyCalls > 0
+        ? solver.legacyIterations / solver.legacyCalls
+        : 0;
+      metrics.ivSeedAvgInitial = solver.seededAttempts > 0
+        ? solver.initialIvSum / solver.seededAttempts
+        : 0;
+      delete metrics.ivSolver;
+    }
+
+    return calculatedMatrix;
   }
 
   /**
@@ -298,6 +380,8 @@ class PositionStore {
         iv = 0.20; // 实在算不出的回退默认值为 20%
       }
       contract.ivRealtime = iv;
+      contract.ivRealtimeSeed = iv;
+      contract.ivRealtimePrice = marketPrice;
 
       const T_global = calculateDayT(currentDateStr, contract.expiration);
       let ivGlobal = calculateImpliedVolatility(spot, contract.strike, T_global, effectiveR, q, marketPrice, contract.type);
@@ -305,6 +389,8 @@ class PositionStore {
         ivGlobal = 0.20;
       }
       contract.ivGlobal = ivGlobal;
+      contract.ivGlobalSeed = ivGlobal;
+      contract.ivGlobalPrice = marketPrice;
     });
   }
 
@@ -370,18 +456,34 @@ class PositionStore {
 
     if (!this.store[ticker][symbol]) {
       this._registerOption(ticker, opt, type, expirationStr);
-      return { inserted: 1, updated: 0 };
+      return { inserted: 1, updated: 0, ivPriceInvalidations: 0, ivPriceReuse: 0 };
     }
 
     const contract = this.store[ticker][symbol];
     const bid = parseFloat(opt.bidPrice) || 0;
     const ask = parseFloat(opt.askPrice) || 0;
+    const midpoint = (bid + ask) / 2.0;
+    const invalidateRealtimeIv = shouldInvalidateIvPrice(contract.ivRealtimePrice, midpoint);
+    const invalidateGlobalIv = shouldInvalidateIvPrice(contract.ivGlobalPrice, midpoint);
     contract.bid = bid;
     contract.ask = ask;
-    contract.midpoint = (bid + ask) / 2.0;
-    contract.ivRealtime = undefined;
-    contract.ivGlobal = undefined;
-    return { inserted: 0, updated: 1 };
+    contract.midpoint = midpoint;
+
+    if (invalidateRealtimeIv) {
+      contract.ivRealtimeSeed = contract.ivRealtime;
+      contract.ivRealtime = undefined;
+    }
+    if (invalidateGlobalIv) {
+      contract.ivGlobalSeed = contract.ivGlobal;
+      contract.ivGlobal = undefined;
+    }
+
+    return {
+      inserted: 0,
+      updated: 1,
+      ivPriceInvalidations: (invalidateRealtimeIv ? 1 : 0) + (invalidateGlobalIv ? 1 : 0),
+      ivPriceReuse: (invalidateRealtimeIv ? 0 : 1) + (invalidateGlobalIv ? 0 : 1)
+    };
   }
 
   /**
@@ -405,7 +507,7 @@ class PositionStore {
       return { inserted: 0, updated: 0 };
     }
 
-    const stats = { inserted: 0, updated: 0 };
+    const stats = { inserted: 0, updated: 0, ivPriceInvalidations: 0, ivPriceReuse: 0 };
     tickerChain.chains.forEach(expiryGroup => {
       const expirationStr = getOptionGroupExpiration(expiryGroup);
       if (!this._isWithinManagedExpiry(expirationStr, currentDateStr)) {
@@ -418,6 +520,8 @@ class PositionStore {
           const result = this._upsertOptionQuote(uppercaseTicker, opt, type, expirationStr);
           stats.inserted += result.inserted;
           stats.updated += result.updated;
+          stats.ivPriceInvalidations += result.ivPriceInvalidations || 0;
+          stats.ivPriceReuse += result.ivPriceReuse || 0;
         });
       };
       upsertContracts(expiryGroup.calls, 'CALL');

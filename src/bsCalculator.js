@@ -101,23 +101,32 @@ function calculateBSPrice(S, K, T, r, q, sigma, optionType) {
  * @param {number} [config.fallbackIV=0.20] - 求解失败时的回退默认值
  * @returns {number} 反推出的隐含波动率 (IV，小数形式，例如 0.25 代表 25%)
  */
-function calculateImpliedVolatility(S, K, T, r, q, marketPrice, optionType, config = {}) {
+function calculateImpliedVolatilityBisectionLegacy(S, K, T, r, q, marketPrice, optionType, config = {}) {
   const maxIterations = config.maxIterations || 100;
   const precision = config.precision || 1e-5;
   const fallbackIV = config.fallbackIV !== undefined ? config.fallbackIV : 0.20;
   const effectiveR = Number.isFinite(r) ? r : 0;
   const effectiveQ = Number.isFinite(q) ? q : 0;
+  const metrics = config.ivMetrics;
+
+  function recordLegacy(iterations) {
+    if (!metrics) return;
+    metrics.legacyCalls += 1;
+    metrics.legacyIterations += iterations;
+  }
 
   if (
     !Number.isFinite(S) || S <= 0 ||
     !Number.isFinite(K) || K <= 0 ||
     !Number.isFinite(marketPrice) || marketPrice <= 0
   ) {
+    recordLegacy(0);
     return fallbackIV;
   }
 
   // 1. 到期或时间异常处理
   if (!Number.isFinite(T) || T <= 0) {
+    recordLegacy(0);
     return fallbackIV;
   }
 
@@ -131,6 +140,7 @@ function calculateImpliedVolatility(S, K, T, r, q, marketPrice, optionType, conf
 
   // 若市场价格低于等于内在价值，强行返回超低IV，防止死循环
   if (marketPrice <= intrinsicValue + 1e-4) {
+    recordLegacy(0);
     return 0.0001; 
   }
 
@@ -144,6 +154,7 @@ function calculateImpliedVolatility(S, K, T, r, q, marketPrice, optionType, conf
     const price = calculateBSPrice(S, K, T, effectiveR, effectiveQ, midIV, optionType);
 
     if (Math.abs(price - marketPrice) < precision) {
+      recordLegacy(i + 1);
       return midIV;
     }
 
@@ -154,6 +165,93 @@ function calculateImpliedVolatility(S, K, T, r, q, marketPrice, optionType, conf
     }
   }
 
+  recordLegacy(maxIterations);
+  return midIV;
+}
+
+function calculateImpliedVolatility(S, K, T, r, q, marketPrice, optionType, config = {}) {
+  const initialIV = Number(config.initialIV);
+  const fallbackIV = config.fallbackIV !== undefined ? config.fallbackIV : 0.20;
+  const precision = config.precision || 1e-5;
+  const effectiveR = Number.isFinite(r) ? r : 0;
+  const effectiveQ = Number.isFinite(q) ? q : 0;
+  const metrics = config.ivMetrics;
+
+  if (metrics) {
+    metrics.totalCalls += 1;
+  }
+
+  if (
+    !Number.isFinite(initialIV) ||
+    initialIV <= 0.0002 ||
+    !Number.isFinite(marketPrice) ||
+    marketPrice <= 0
+  ) {
+    return calculateImpliedVolatilityBisectionLegacy(S, K, T, effectiveR, effectiveQ, marketPrice, optionType, config);
+  }
+
+  if (metrics) {
+    metrics.seededAttempts += 1;
+    metrics.initialIvSum += initialIV;
+  }
+
+  const initialPrice = calculateBSPrice(S, K, T, effectiveR, effectiveQ, initialIV, optionType);
+  if (Number.isFinite(initialPrice) && Math.abs(initialPrice - marketPrice) < precision) {
+    if (metrics) {
+      metrics.seededHits += 1;
+      metrics.seededIterations += 1;
+    }
+    return initialIV;
+  }
+
+  const lowIV = Math.max(0.0001, Math.min(initialIV * 0.5, initialIV - 0.05));
+  const highIV = Math.min(5.0, Math.max(initialIV * 1.5, initialIV + 0.05));
+
+  const lowPrice = calculateBSPrice(S, K, T, effectiveR, effectiveQ, lowIV, optionType);
+  const highPrice = calculateBSPrice(S, K, T, effectiveR, effectiveQ, highIV, optionType);
+  const minBracketPrice = Math.min(lowPrice, highPrice);
+  const maxBracketPrice = Math.max(lowPrice, highPrice);
+
+  if (
+    !Number.isFinite(lowPrice) ||
+    !Number.isFinite(highPrice) ||
+    marketPrice < minBracketPrice ||
+    marketPrice > maxBracketPrice
+  ) {
+    if (metrics) {
+      metrics.seededFallbacks += 1;
+    }
+    return calculateImpliedVolatilityBisectionLegacy(S, K, T, effectiveR, effectiveQ, marketPrice, optionType, config);
+  }
+
+  let low = lowIV;
+  let high = highIV;
+  let midIV = initialIV || fallbackIV;
+  const maxIterations = config.seededMaxIterations || 35;
+
+  for (let i = 0; i < maxIterations; i++) {
+    midIV = (low + high) / 2.0;
+    const price = calculateBSPrice(S, K, T, effectiveR, effectiveQ, midIV, optionType);
+
+    if (Math.abs(price - marketPrice) < precision) {
+      if (metrics) {
+        metrics.seededHits += 1;
+        metrics.seededIterations += i + 1;
+      }
+      return midIV;
+    }
+
+    if (price < marketPrice) {
+      low = midIV;
+    } else {
+      high = midIV;
+    }
+  }
+
+  if (metrics) {
+    metrics.seededHits += 1;
+    metrics.seededIterations += maxIterations;
+  }
   return midIV;
 }
 
@@ -226,6 +324,7 @@ module.exports = {
   standardNormalPDF,
   standardNormalCDF,
   calculateBSPrice,
+  calculateImpliedVolatilityBisectionLegacy,
   calculateImpliedVolatility,
   calculateBSGreeks
 };

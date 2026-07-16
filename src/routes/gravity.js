@@ -1,7 +1,6 @@
 const express = require('express');
 const gexService = require('../gexService');
 const gravityPresenter = require('../gravityPresenter');
-const datacenter = require('../datacenter');
 const {
   getClientGravityMap,
   getClientGravityState,
@@ -29,11 +28,6 @@ router.get('/gravity-state', async (req, res) => {
           state.gexSummary = lastPoint.gexData;
         }
       }
-    }
-
-    const quotePrices = await datacenter.fetchQuotePrices([ticker]);
-    if (quotePrices[ticker]) {
-      state.spot = quotePrices[ticker];
     }
   }
   res.json(await getClientGravityState(ticker, range));

@@ -9,11 +9,13 @@ const fs = require('fs');
 const logger = require('./utils/logger')('scheduler');
 const timeUtils = require('./utils/timeUtils');
 const gexService = require('./gexService');
+const datacenter = require('./datacenter');
 const economicCalendarRegime = require('./economicCalendarRegime');
 const paths = require('./paths');
 const { BUILTIN_TICKERS } = require('./tickerConfig');
 
 const { getEstDate, getEstParts } = timeUtils;
+const { fetchQuotePrices } = datacenter;
 const {
   tickerStates,
   initializeGlobalCursorAndCounts,
@@ -23,11 +25,16 @@ const {
 } = gexService;
 
 // 定时器与状态容器
-const chainTimers = {};
+const chainUpdateStatus = {};
 let globalTradeTimer = null;
+let liveChainRoundTimer = null;
+let liveChainRoundRunning = false;
+let liveChainRoundSeq = 0;
 let regimeTimer = null;
 let currentSystemRegime = 'IDLE'; // IDLE (休眠), PREPARING (开盘前准备 09:20~09:30), TRADING (交易中 09:30~16:00)
 let liveDataCleanupDate = null;
+const LIVE_CHAIN_ROUND_INTERVAL_MS = 20000;
+const LIVE_CHAIN_CONCURRENCY = 3;
 
 /**
  * 获取宏观 Regime
@@ -41,6 +48,7 @@ async function getCurrentRegime() {
  * @returns {'IDLE' | 'PREPARING' | 'TRADING'}
  */
 function getEstRequiredRegime() {
+  // return 'TRADING';
   const parts = getEstParts();
   const day = new Date(`${parts.year}-${String(parts.month).padStart(2, '0')}-${String(parts.day).padStart(2, '0')}T00:00:00Z`).getUTCDay(); // 0=周日, 6=周六, 1-5=周一至周五
 
@@ -73,12 +81,112 @@ function stopAllPolls() {
     clearInterval(globalTradeTimer);
     globalTradeTimer = null;
   }
+  if (liveChainRoundTimer) {
+    clearTimeout(liveChainRoundTimer);
+    liveChainRoundTimer = null;
+  }
+  liveChainRoundRunning = false;
   BUILTIN_TICKERS.forEach(ticker => {
-    if (chainTimers[ticker]) {
-      clearInterval(chainTimers[ticker]);
-      chainTimers[ticker] = null;
+    if (chainUpdateStatus[ticker]) {
+      chainUpdateStatus[ticker].pending = false;
     }
   });
+}
+
+async function runQueuedChainUpdate(ticker, options = {}) {
+  const status = chainUpdateStatus[ticker] || { running: false, pending: false };
+  chainUpdateStatus[ticker] = status;
+
+  if (status.running) {
+    status.pending = true;
+    return;
+  }
+
+  status.running = true;
+  try {
+    do {
+      status.pending = false;
+      await updateChainAndRecalculate(ticker, options);
+    } while (status.pending);
+  } catch (e) {
+    logger.error(`[Scheduler] Live Greeks update failed for ${ticker}:`, e.message);
+  } finally {
+    status.running = false;
+  }
+}
+
+async function runWithConcurrency(items, limit, worker) {
+  let nextIndex = 0;
+  const workerCount = Math.min(limit, items.length);
+
+  async function runWorker() {
+    while (nextIndex < items.length) {
+      const item = items[nextIndex];
+      nextIndex += 1;
+      await worker(item);
+    }
+  }
+
+  await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+}
+
+async function runLiveChainRound() {
+  const quoteStartedAt = Date.now();
+  const quotePromise = fetchQuotePrices(BUILTIN_TICKERS)
+    .then(prices => {
+      const duration = Date.now() - quoteStartedAt;
+      const priceSummary = BUILTIN_TICKERS
+        .map(ticker => `${ticker}=${prices[ticker] || 'N/A'}`)
+        .join(' ');
+      logger.info(`[Scheduler] Batch quote fetched ${Object.keys(prices).length}/${BUILTIN_TICKERS.length} tickers in ${duration}ms: ${priceSummary}`);
+      return prices;
+    })
+    .catch(err => {
+      logger.warn(`[Scheduler] Batch quote fetch failed: ${err.message}`);
+      return {};
+    });
+
+  await runWithConcurrency(BUILTIN_TICKERS, LIVE_CHAIN_CONCURRENCY, ticker =>
+    runQueuedChainUpdate(ticker, { quotePromise })
+  );
+}
+
+async function runLiveChainRoundAndScheduleNext() {
+  if (currentSystemRegime !== 'TRADING' || liveChainRoundRunning) {
+    return;
+  }
+
+  liveChainRoundTimer = null;
+  liveChainRoundRunning = true;
+  liveChainRoundSeq += 1;
+  const roundSeq = liveChainRoundSeq;
+  const startedAt = Date.now();
+  logger.info(`[Scheduler] ===== Live chain round #${roundSeq} START tickers=${BUILTIN_TICKERS.length} chainConcurrency=${LIVE_CHAIN_CONCURRENCY} =====`);
+
+  try {
+    await runLiveChainRound();
+  } catch (e) {
+    logger.error(`[Scheduler] Live chain round failed:`, e.message);
+  } finally {
+    liveChainRoundRunning = false;
+  }
+
+  if (currentSystemRegime !== 'TRADING') {
+    return;
+  }
+
+  const elapsed = Date.now() - startedAt;
+  const delay = Math.max(0, LIVE_CHAIN_ROUND_INTERVAL_MS - elapsed);
+  logger.info(`[Scheduler] ===== Live chain round #${roundSeq} END elapsed=${elapsed}ms nextIn=${delay}ms =====`);
+  liveChainRoundTimer = setTimeout(runLiveChainRoundAndScheduleNext, delay);
+}
+
+function startLiveChainRoundLoop() {
+  if (liveChainRoundTimer || liveChainRoundRunning) {
+    return;
+  }
+  logger.info(`[Scheduler] Starting live Greeks round loop (${LIVE_CHAIN_ROUND_INTERVAL_MS}ms target interval, ${LIVE_CHAIN_CONCURRENCY} chain concurrency)`);
+  liveChainRoundTimer = setTimeout(runLiveChainRoundAndScheduleNext, 0);
 }
 
 function cleanupOldLiveData(todayStr) {
@@ -156,15 +264,8 @@ async function startTradingPolls() {
     }
   }
 
-  // 2. 为每个 Ticker 分配专属的 20秒 期权链与 Greeks 计算定时器
-  BUILTIN_TICKERS.forEach(ticker => {
-    if (!chainTimers[ticker]) {
-      logger.info(`[Scheduler] Starting live Greeks timer for ${ticker} (20s interval)`);
-      chainTimers[ticker] = setInterval(async () => {
-        await updateChainAndRecalculate(ticker);
-      }, 20000);
-    }
-  });
+  // 2. 启动全局 20秒目标间隔的 Greeks 轮询；每轮批量拉 quote，期权链最多 5 个并发。
+  startLiveChainRoundLoop();
 
   // 3. 开启全局 15秒 大单流拉取定时器
   if (!globalTradeTimer) {

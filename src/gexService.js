@@ -6,6 +6,7 @@
  */
 
 const fs = require('fs');
+const { performance } = require('perf_hooks');
 
 // 导入量化核心组件与工具类
 const { calculateImpliedVolatility } = require('./bsCalculator');
@@ -47,6 +48,7 @@ const GEX_STRIKE_RADIUS = 20;
 const tickerStates = {};
 const liveTickerCounts = {};
 const knownSignalIds = new Set();
+const historyWriteQueues = {};
 let lastUpdatedCursor = 0;
 
 // 初始化每个内置 Ticker 的状态空间
@@ -134,8 +136,8 @@ function getStrikesAroundSpot(sortedStrikes, spot, radius = 10) {
   return sortedStrikes.slice(startIdx, endIdx + 1);
 }
 
-function buildGexSummaries(matrixViews, spot) {
-  return gexAggregator.buildSummaries(matrixViews, spot);
+function buildGexSummaries(matrixViews, spot, metrics = null) {
+  return gexAggregator.buildSummaries(matrixViews, spot, metrics);
 }
 
 function countManagedChainContracts(ticker, chainData, todayStr) {
@@ -183,6 +185,53 @@ function getPrimaryGexMetrics(gexSummary) {
     realtimePutWall: all.realtimePutWall || null,
     realtimeZeroGamma: all.realtimeZeroGamma || null
   };
+}
+
+function formatDurationMs(ms) {
+  return `${Math.max(0, Math.round(ms))}ms`;
+}
+
+function formatBytes(bytes) {
+  const num = Number(bytes);
+  if (!Number.isFinite(num) || num <= 0) return '0B';
+  if (num >= 1024 * 1024) return `${(num / (1024 * 1024)).toFixed(2)}MB`;
+  if (num >= 1024) return `${(num / 1024).toFixed(1)}KB`;
+  return `${Math.round(num)}B`;
+}
+
+function formatTimingValue(key, value) {
+  if (/bytes|contentlength/i.test(key)) return formatBytes(value);
+  if (/contracts|calcs$/i.test(key)) return String(Math.round(Number(value) || 0));
+  if (/attempts|fallbacks|hits|calls|reuse|invalidations/i.test(key)) return String(Math.round(Number(value) || 0));
+  if (/iterations/i.test(key)) return `${(Number(value) || 0).toFixed(1)}`;
+  if (/initial/i.test(key)) return `${((Number(value) || 0) * 100).toFixed(2)}%`;
+  if (key === 'eventLoopUtilization') return `${((Number(value) || 0) * 100).toFixed(1)}%`;
+  return formatDurationMs(value);
+}
+
+function formatTimingBreakdown(timings) {
+  return Object.entries(timings)
+    .map(([key, value]) => `${key}=${formatTimingValue(key, value)}`)
+    .join(' ');
+}
+
+function enqueueHistoryWrite(ticker, historyPath, historySnapshot) {
+  const uppercaseTicker = String(ticker || '').toUpperCase();
+  const previousWrite = historyWriteQueues[uppercaseTicker] || Promise.resolve();
+
+  const writeTask = previousWrite
+    .catch(() => {})
+    .then(async () => {
+      const startedAt = Date.now();
+      await fs.promises.writeFile(historyPath, JSON.stringify(historySnapshot, null, 2));
+      logger.debug(`[HistoryWrite] ${uppercaseTicker} wrote ${historySnapshot.length} points in ${Date.now() - startedAt}ms`);
+    })
+    .catch(err => {
+      logger.error(`[HistoryWrite] Failed to write history for ${uppercaseTicker}:`, err.message);
+    });
+
+  historyWriteQueues[uppercaseTicker] = writeTask;
+  return writeTask;
 }
 
 function updateCursor(items) {
@@ -520,7 +569,10 @@ async function pollAndApplyTrades() {
 /**
  * 盘中期权链报价获取、重算与历史点异步保存
  */
-async function updateChainAndRecalculate(ticker) {
+async function updateChainAndRecalculate(ticker, options = {}) {
+  const updateStartedAt = Date.now();
+  const timings = {};
+  const eluStartedAt = performance.eventLoopUtilization();
   const todayStr = getEstDate();
   const state = tickerStates[ticker];
   if (!state) return;
@@ -530,8 +582,11 @@ async function updateChainAndRecalculate(ticker) {
   logger.info(`[LiveChain] Updating options chain quotes and recalculating Greeks for ${ticker}...`);
 
   let chainData = null;
+  let fetchChainStartedAt = Date.now();
   try {
-    chainData = await datacenter.fetchLiveChain(ticker);
+    fetchChainStartedAt = Date.now();
+    chainData = await datacenter.fetchLiveChain(ticker, { metrics: timings });
+    timings.fetchChain = Date.now() - fetchChainStartedAt;
     // Snapshot persistence disabled: live chain data is only needed for in-memory recalculation.
     // const prunedChainData = pruneOptionChain(chainData, state.spot, todayStr);
     // const timeStr = getEstTime().timeStrCompact.substring(0, 4);
@@ -542,6 +597,7 @@ async function updateChainAndRecalculate(ticker) {
     // const snapPath = paths.optionSnapshotPath(todayStr, ticker, timeStr);
     // await fs.promises.writeFile(snapPath, JSON.stringify(prunedChainData, null, 2));
   } catch (err) {
+    timings.fetchChain = Date.now() - fetchChainStartedAt;
     logger.error(`[LiveChain] Error fetching options chain for ${ticker}:`, err.message);
   }
 
@@ -549,7 +605,11 @@ async function updateChainAndRecalculate(ticker) {
   const timeNowStr = estDetails.timeStr;
   state.currentTimeSeconds = estDetails.seconds;
 
-  const quotePrices = await fetchQuotePrices([ticker]);
+  const fetchQuoteStartedAt = Date.now();
+  const quotePrices = options.quotePromise
+    ? await options.quotePromise
+    : await fetchQuotePrices([ticker]);
+  timings.fetchQuote = Date.now() - fetchQuoteStartedAt;
   if (quotePrices[ticker]) {
     state.spot = quotePrices[ticker];
   } else if (chainData) {
@@ -564,11 +624,17 @@ async function updateChainAndRecalculate(ticker) {
     return;
   }
 
+  let rebuiltStore = false;
   if (chainData) {
+    const storeUpdateStartedAt = Date.now();
     if (needsStoreRebuild(ticker, chainData, todayStr)) {
       rebuildTickerStoreFromChain(ticker, chainData, todayStr, state);
+      rebuiltStore = true;
     }
     const updateStats = store.updateChainPrices(ticker, chainData, todayStr);
+    timings.updateStore = Date.now() - storeUpdateStartedAt;
+    timings.ivPriceInvalidations = updateStats.ivPriceInvalidations || 0;
+    timings.ivPriceReuse = updateStats.ivPriceReuse || 0;
     if (updateStats && updateStats.inserted > 0) {
       logger.info(`[LiveChain] Upserted ${updateStats.inserted} missing contracts for ${ticker}; updated ${updateStats.updated}.`);
     }
@@ -577,9 +643,17 @@ async function updateChainAndRecalculate(ticker) {
   }
 
   const clampedTimeNowStr = clampTradingTime(timeNowStr);
-  const finalMatrix = store.calculateMatrixGEX(ticker, state.spot, pricingConfig.riskFreeRate, todayStr, clampedTimeNowStr);
+  const matrixStartedAt = Date.now();
+  const finalMatrix = store.calculateMatrixGEX(ticker, state.spot, pricingConfig.riskFreeRate, todayStr, clampedTimeNowStr, 'all', { metrics: timings });
+  timings.calculateMatrix = Date.now() - matrixStartedAt;
+
+  const viewsStartedAt = Date.now();
   const matrixViews = buildExpiryViews(finalMatrix, todayStr);
-  const gexSummary = buildGexSummaries(matrixViews, state.spot);
+  timings.buildViews = Date.now() - viewsStartedAt;
+
+  const summaryStartedAt = Date.now();
+  const gexSummary = buildGexSummaries(matrixViews, state.spot, timings);
+  timings.buildSummaries = Date.now() - summaryStartedAt;
   state.calculatedMatrix = finalMatrix;
   state.matrixViews = matrixViews;
   state.gexSummary = gexSummary;
@@ -607,19 +681,38 @@ async function updateChainAndRecalculate(ticker) {
 
   existingHistory.sort((a, b) => a.sec - b.sec);
 
-  await fs.promises.writeFile(historyPath, JSON.stringify(existingHistory, null, 2));
-
+  const writeHistoryStartedAt = Date.now();
   state.history = existingHistory;
+  enqueueHistoryWrite(ticker, historyPath, existingHistory.slice());
+  timings.writeHistory = Date.now() - writeHistoryStartedAt;
   logger.info(`[LiveChain] Greeks recalculated for ${ticker}. Spot=$${state.spot}, History count: ${existingHistory.length}`);
 
+  const pushStartedAt = Date.now();
   try {
     await gravityInternalClient.pushHistoryPoint({
       ticker,
       date: todayStr,
       point: newHistoryPoint
     });
+    timings.pushGravity = Date.now() - pushStartedAt;
   } catch (e) {
+    timings.pushGravity = Date.now() - pushStartedAt;
     logger.warn(`[GravityPush] Unexpected push error for ${ticker} ${minuteStr}: ${e.message}`);
+  }
+
+  timings.total = Date.now() - updateStartedAt;
+  const elu = performance.eventLoopUtilization(eluStartedAt);
+  timings.eventLoopUtilization = elu.utilization;
+  const contractCounts = {
+    all: finalMatrix.length,
+    today: matrixViews['0dte'].length,
+    weekly: matrixViews.weekly.length
+  };
+  const timingMessage = `[LiveChainTiming] ${ticker} contracts=${contractCounts.all} 0dte=${contractCounts.today} weekly=${contractCounts.weekly} history=${existingHistory.length} rebuiltStore=${rebuiltStore} ${formatTimingBreakdown(timings)}`;
+  if (timings.total > 20000) {
+    logger.warn(timingMessage);
+  } else {
+    logger.info(timingMessage);
   }
 }
 

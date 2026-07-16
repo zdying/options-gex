@@ -10,21 +10,26 @@ class GexAggregator {
   constructor(config = {}) {
     this.strikeRadius = config.strikeRadius !== undefined ? config.strikeRadius : 20;
     this.wallPctRange = config.wallPctRange !== undefined ? config.wallPctRange : 0.10;
-    this.zeroGammaPctRange = config.zeroGammaPctRange !== undefined ? config.zeroGammaPctRange : 0.10;
-    this.zeroGammaSteps = config.zeroGammaSteps !== undefined ? config.zeroGammaSteps : 80;
+    // Zero-gamma scan is temporarily disabled to reduce CPU load on small hosts.
+    // this.zeroGammaPctRange = config.zeroGammaPctRange !== undefined ? config.zeroGammaPctRange : 0.10;
+    // this.zeroGammaSteps = config.zeroGammaSteps !== undefined ? config.zeroGammaSteps : 80;
     this.riskFreeRate = config.riskFreeRate !== undefined ? config.riskFreeRate : pricingConfig.riskFreeRate;
   }
 
-  buildSummaries(matrixViews, spot) {
+  buildSummaries(matrixViews, spot, metrics = null) {
     return {
-      all: this.buildSummary(matrixViews.all, spot),
-      '0dte': this.buildSummary(matrixViews['0dte'], spot),
-      weekly: this.buildSummary(matrixViews.weekly, spot)
+      all: this.buildSummary(matrixViews.all, spot, 'all', metrics),
+      '0dte': this.buildSummary(matrixViews['0dte'], spot, '0dte', metrics),
+      weekly: this.buildSummary(matrixViews.weekly, spot, 'weekly', metrics)
     };
   }
 
-  buildSummary(matrix, spot) {
+  buildSummary(matrix, spot, label = 'summary', metrics = null) {
+    const startedAt = metrics ? Date.now() : 0;
     const contracts = Array.isArray(matrix) ? matrix : [];
+    if (metrics) {
+      metrics[`summary_${label}_contracts`] = contracts.length;
+    }
     const strikeRows = this._buildStrikeRows(contracts);
     const sortedStrikes = Object.keys(strikeRows).map(Number).sort((a, b) => a - b);
     const displayStrikes = this._getStrikesAroundSpot(sortedStrikes, spot, this.strikeRadius);
@@ -35,10 +40,13 @@ class GexAggregator {
     const globalWalls = this._findWalls(strikeRows, spot, 'globalGex');
     const realtimeWalls = this._findWalls(strikeRows, spot, 'realtimeGex');
 
-    const globalZeroGamma = this._findZeroGammaBySpotScan(contracts, spot, 'global');
-    const realtimeZeroGamma = this._findZeroGammaBySpotScan(contracts, spot, 'realtime');
+    // Zero-gamma scan is CPU-heavy because it recalculates Greeks across many spot steps.
+    // const globalZeroGamma = this._findZeroGammaBySpotScan(contracts, spot, 'global');
+    // const realtimeZeroGamma = this._findZeroGammaBySpotScan(contracts, spot, 'realtime');
+    const globalZeroGamma = null;
+    const realtimeZeroGamma = null;
 
-    return {
+    const summary = {
       strikes: displayStrikes,
       realtimeStrikeGexMillions: displayStrikes.map(k => this._finite(strikeRows[k].realtimeGex) / 1e6),
       globalStrikeGexMillions: displayStrikes.map(k => this._finite(strikeRows[k].globalGex) / 1e6),
@@ -54,6 +62,10 @@ class GexAggregator {
       globalPutWall: globalWalls.putWall,
       globalZeroGamma
     };
+    if (metrics) {
+      metrics[`summary_${label}`] = Date.now() - startedAt;
+    }
+    return summary;
   }
 
   _buildStrikeRows(contracts) {

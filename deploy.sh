@@ -14,7 +14,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-REMOTE_HOST="${REMOTE_HOST:-amd1}"
+REMOTE_HOST="${REMOTE_HOST:-arm2}"
 REMOTE_PORT="${REMOTE_PORT:-}"
 REMOTE_SERVER_DIR="${REMOTE_SERVER_DIR:-/home/ubuntu/options-indicator}"
 PM2_APP_NAME="${PM2_APP_NAME:-options-indicator}"
