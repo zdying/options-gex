@@ -100,9 +100,16 @@ function cleanupOldLiveData(todayStr) {
   }
 
   liveDataCleanupDate = todayStr;
+  const retentionCutoff = new Date(`${todayStr}T00:00:00Z`);
+  retentionCutoff.setUTCMonth(retentionCutoff.getUTCMonth() - 1);
 
   entries.forEach(entry => {
-    if (!entry.isDirectory() || !/^\d{4}-\d{2}-\d{2}$/.test(entry.name) || entry.name === todayStr) {
+    if (!entry.isDirectory() || !/^\d{4}-\d{2}-\d{2}$/.test(entry.name)) {
+      return;
+    }
+
+    const entryDate = new Date(`${entry.name}T00:00:00Z`);
+    if (!Number.isFinite(entryDate.getTime()) || entryDate >= retentionCutoff) {
       return;
     }
 

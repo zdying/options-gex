@@ -80,17 +80,114 @@ function has0DteData(state) {
   );
 }
 
-async function getClientGravityState(ticker) {
+function hasGravityMapData(map) {
+  return Boolean(
+    map &&
+    Array.isArray(map.strikes) &&
+    map.strikes.length > 0 &&
+    Array.isArray(map.liveGravityCurve) &&
+    Array.isArray(map.openingGravityCurve)
+  );
+}
+
+function formatMapTime(sec) {
+  const time = timeUtils.formatTime(Number(sec) || 0);
+  return time.slice(0, 5);
+}
+
+function getLatestHistoryPointForExpiry(state, expiry) {
+  const history = Array.isArray(state && state.history) ? state.history : [];
+  for (let i = history.length - 1; i >= 0; i--) {
+    const point = history[i];
+    if (point && point.gexData && point.gexData[expiry]) {
+      return point;
+    }
+  }
+  return null;
+}
+
+function withGravityMapMeta(map, meta = {}) {
+  if (!map) return null;
+  return {
+    date: meta.date || timeUtils.getEstDate(),
+    time: meta.time || formatMapTime(meta.sec),
+    sec: Number.isFinite(Number(meta.sec)) ? Number(meta.sec) : null,
+    spot: Number.isFinite(Number(meta.spot)) ? Number(meta.spot) : null,
+    ...map
+  };
+}
+
+function getClientGravityMap(ticker, range = 'all') {
+  const selectedRange = gravityPresenter.normalizeRange(range, 'all');
+  const expiry = gravityPresenter.mapRangeToExpiry(selectedRange);
+  const todayStr = timeUtils.getEstDate();
+  const state = getTickerState(ticker);
+  if (!state) return null;
+
+  const spot = state.spot;
+  const isMarketClosed = state.currentTimeSeconds >= 16 * 3600 || marketScheduler.currentSystemRegime === 'IDLE';
+
+  if (state.gexSummary && state.gexSummary[expiry] && state.gexSummary[expiry].strikes && state.gexSummary[expiry].strikes.length > 0) {
+    const latestPoint = getLatestHistoryPointForExpiry(state, expiry);
+    return withGravityMapMeta(gravityPresenter.toMap(state.gexSummary[expiry]), {
+      date: (latestPoint && latestPoint.date) || state.historyDate || todayStr,
+      time: latestPoint && latestPoint.time,
+      sec: latestPoint ? latestPoint.sec : state.currentTimeSeconds,
+      spot: latestPoint ? latestPoint.spot : spot
+    });
+  }
+
+  if (isMarketClosed) {
+    const latestHistory = getLatestHistoryForTicker(ticker);
+    if (latestHistory.history.length > 0) {
+      const lastPoint = latestHistory.history[latestHistory.history.length - 1];
+      if (lastPoint.gexData && lastPoint.gexData[expiry]) {
+        logger.info(`[Gravity API] Returned cached ${selectedRange} gravity map from ${latestHistory.date} history for ${ticker}.`);
+        return withGravityMapMeta(gravityPresenter.toMap(lastPoint.gexData[expiry]), {
+          date: lastPoint.date || latestHistory.date,
+          time: lastPoint.time,
+          sec: lastPoint.sec,
+          spot: lastPoint.spot
+        });
+      }
+    }
+  }
+
+  if (state.calculatedMatrix && state.calculatedMatrix.length > 0) {
+    const matrixViews = gexService.buildExpiryViews(state.calculatedMatrix, todayStr);
+    state.matrixViews = matrixViews;
+    state.gexSummary = gexService.buildGexSummaries(matrixViews, spot);
+    const map = gravityPresenter.toMap(state.gexSummary[expiry]);
+    return hasGravityMapData(map)
+      ? withGravityMapMeta(map, {
+        date: todayStr,
+        sec: state.currentTimeSeconds,
+        spot
+      })
+      : null;
+  }
+
+  return null;
+}
+
+async function getClientGravityState(ticker, requestedRange = 'today') {
   const defaultTicker = BUILTIN_TICKERS[0] || 'SPY';
   ticker = (ticker || defaultTicker).toUpperCase();
   const state = getTickerState(ticker);
   const gravityReference = await marketScheduler.getCurrentRegime();
+  const normalizedRange = gravityPresenter.normalizeRange(requestedRange, 'today');
 
   if (!state) {
-    return gravityPresenter.statePayload({ ticker, gravityReference }, ticker);
+    const emptyState = gravityPresenter.statePayload({ ticker, gravityReference }, ticker);
+    const selectedRange = normalizedRange === 'today' ? 'near' : normalizedRange;
+    return {
+      ...emptyState,
+      selectedRange,
+      gravityMap: null
+    };
   }
 
-  return gravityPresenter.statePayload({
+  const clientState = gravityPresenter.statePayload({
     ticker: state.ticker,
     isRunning: state.isRunning,
     currentTime: timeUtils.formatTime(state.currentTimeSeconds),
@@ -100,9 +197,19 @@ async function getClientGravityState(ticker) {
     has0Dte: has0DteData(state),
     gravityReference
   }, ticker);
+  const selectedRange = clientState.has0Dte === false && normalizedRange === 'today'
+    ? 'near'
+    : normalizedRange;
+
+  return {
+    ...clientState,
+    selectedRange,
+    gravityMap: getClientGravityMap(ticker, selectedRange)
+  };
 }
 
 module.exports = {
+  getClientGravityMap,
   getClientGravityState,
   getLatestHistoryForTicker,
   getLatestTradeDateWithData,

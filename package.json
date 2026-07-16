@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node src/app.js",
     "dev": "export NODE_ENV=development && node src/app.js",
+    "sync:gravity": "node scripts/push_gravity_history.js",
     "test": "node test_calculator.js && node test_store.js && node test_flow.js && node test_aggregator.js"
   },
   "dependencies": {

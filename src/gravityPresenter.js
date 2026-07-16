@@ -5,8 +5,14 @@ function mapRangeToExpiry(range = 'all') {
   return 'all';
 }
 
-function getRequestedRange(req) {
-  return req.query.range || 'all';
+function normalizeRange(range, fallback = 'all') {
+  const normalized = String(range || fallback || 'all').toLowerCase();
+  if (['today', 'near', 'all'].includes(normalized)) return normalized;
+  return fallback;
+}
+
+function getRequestedRange(req, fallback = 'all') {
+  return normalizeRange(req && req.query ? req.query.range : null, fallback);
 }
 
 function emptyMap() {
@@ -26,6 +32,23 @@ function emptyMap() {
   };
 }
 
+function roundNumber(value, decimals = 2) {
+  if (value === null || value === undefined || value === '') return null;
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  return Number(num.toFixed(decimals));
+}
+
+function roundNumberOrZero(value, decimals = 2) {
+  const rounded = roundNumber(value, decimals);
+  return rounded === null ? 0 : rounded;
+}
+
+function roundNumberArray(values, decimals = 2) {
+  if (!Array.isArray(values)) return [];
+  return values.map(value => roundNumberOrZero(value, decimals));
+}
+
 function toMetrics(source = {}) {
   source = source || {};
   const openingGravity = Number(source.globalTotalGex) || 0;
@@ -33,26 +56,27 @@ function toMetrics(source = {}) {
   const rawShift = Number(source.gexChange);
 
   return {
-    openingGravity,
-    liveGravity,
-    gravityShift: Number.isFinite(rawShift) ? rawShift : liveGravity - openingGravity,
-    openingUpperGravity: source.globalCallWall || null,
-    openingLowerGravity: source.globalPutWall || null,
-    openingGravityAxis: source.globalZeroGamma || null,
-    upperGravity: source.realtimeCallWall || null,
-    lowerGravity: source.realtimePutWall || null,
-    gravityAxis: source.realtimeZeroGamma || null
+    openingGravity: roundNumberOrZero(openingGravity),
+    liveGravity: roundNumberOrZero(liveGravity),
+    gravityShift: roundNumberOrZero(Number.isFinite(rawShift) ? rawShift : liveGravity - openingGravity),
+    openingUpperGravity: roundNumber(source.globalCallWall),
+    openingLowerGravity: roundNumber(source.globalPutWall),
+    openingGravityAxis: roundNumber(source.globalZeroGamma),
+    upperGravity: roundNumber(source.realtimeCallWall),
+    lowerGravity: roundNumber(source.realtimePutWall),
+    gravityAxis: roundNumber(source.realtimeZeroGamma)
   };
 }
 
 function toMap(source = {}) {
   source = source || {};
   return {
-    strikes: Array.isArray(source.strikes) ? source.strikes : [],
-    liveGravityCurve: Array.isArray(source.realtimeStrikeGexMillions) ? source.realtimeStrikeGexMillions : [],
-    openingGravityCurve: Array.isArray(source.globalStrikeGexMillions) ? source.globalStrikeGexMillions : [],
-    liveGravityRaw: Array.isArray(source.strikeGexRealtime) ? source.strikeGexRealtime : [],
-    openingGravityRaw: Array.isArray(source.strikeGexGlobal) ? source.strikeGexGlobal : [],
+    strikes: roundNumberArray(source.strikes),
+    liveGravityCurve: roundNumberArray(source.realtimeStrikeGexMillions),
+    openingGravityCurve: roundNumberArray(source.globalStrikeGexMillions),
+    // Raw GEX arrays are intentionally not exposed through gravity presenter payloads.
+    // liveGravityRaw: Array.isArray(source.strikeGexRealtime) ? source.strikeGexRealtime : [],
+    // openingGravityRaw: Array.isArray(source.strikeGexGlobal) ? source.strikeGexGlobal : [],
     ...toMetrics(source)
   };
 }
@@ -62,7 +86,7 @@ function toReference(source = {}) {
   const score = Number(source.score);
 
   return {
-    score: Number.isFinite(score) ? score : 0,
+    score: Number.isFinite(score) ? roundNumberOrZero(score) : 0,
     level: source.level || (score >= 80 ? '高' : score >= 50 ? '中' : '低'),
     message: source.message || '引力位不是预测目标，而是需要重点观察的关键价格。',
     reasons: Array.isArray(source.reasons) ? source.reasons : []
@@ -100,9 +124,9 @@ function statePayload(input = {}, fallbackTicker = 'SPY') {
     selectedTicker: input.ticker || fallbackTicker,
     isRunning: Boolean(input.isRunning),
     currentTime: input.currentTime || '09:30:00',
-    currentTimePct: Number(input.currentTimePct) || 0,
+    currentTimePct: roundNumberOrZero(input.currentTimePct),
     speedMultiplier: 1,
-    spot: input.spot || 0,
+    spot: roundNumberOrZero(input.spot),
     has0Dte: Boolean(input.has0Dte),
     latestGravity: toMetrics(input.latestMetrics),
     gravityReference: toReference(input.gravityReference)
@@ -115,6 +139,7 @@ module.exports = {
   mapForHistoryPoint,
   mapRangeToExpiry,
   metricsForHistoryPoint,
+  normalizeRange,
   statePayload,
   toMap,
   toMetrics

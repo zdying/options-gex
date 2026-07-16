@@ -367,7 +367,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (isReplaying) {
       renderReplayFrame();
     } else {
-      updateCharts();
+      pollState({ forceHistory: true });
     }
   });
 
@@ -485,33 +485,7 @@ function renderReplayFrame() {
   // 4. 更新引力分布图
   const gravityMap = point.gravityMap || null;
   updateGravityChartTitle(tickerSelect.value, range, point.date, point.time);
-
-  if (gravityMap && gravityChart) {
-    const displayMap = getDisplayGravityMap(gravityMap, gravityChart);
-    const liveGravityPoints = getGravityPoints(displayMap.strikes, displayMap.liveGravityCurve);
-    const openingGravityPoints = getGravityPoints(displayMap.strikes, displayMap.openingGravityCurve);
-    gravityChart.$rawGravityData = {
-      strikes: displayMap.strikes,
-      liveGravityCurve: displayMap.liveGravityCurve,
-      openingGravityCurve: displayMap.openingGravityCurve
-    };
-    gravityChart.data.labels = [];
-
-    // Dataset 0: 实时引力
-    gravityChart.data.datasets[0].data = liveGravityPoints;
-    gravityChart.data.datasets[0].pointBackgroundColor = liveGravityPoints.map(() => 'rgba(255, 42, 95, 1)');
-    gravityChart.data.datasets[0].pointBorderColor = liveGravityPoints.map(() => 'rgba(255, 42, 95, 0.3)');
-
-    // Dataset 1: 开盘引力
-    gravityChart.data.datasets[1].data = openingGravityPoints;
-    gravityChart.data.datasets[1].pointBackgroundColor = openingGravityPoints.map(() => 'rgba(156, 163, 175, 0.85)');
-    gravityChart.data.datasets[1].pointBorderColor = openingGravityPoints.map(() => 'rgba(156, 163, 175, 0.25)');
-
-    gravityChart.options.plugins.verticalLines = [
-      { value: point.spot, color: 'rgba(245, 158, 11, 0.95)', lineWidth: 1, dash: [4, 4], label: 'Spot', offset: 12 }
-    ];
-    gravityChart.update('none');
-  }
+  renderGravityMap(gravityMap, point.spot);
 
   // 5. 更新时序图（只绘制到当前播放进度，实现折线向右流动的效果）
   if (historyChart) {
@@ -540,6 +514,47 @@ function getGravityPoints(strikes, values) {
       y: Number(values[index]) || 0
     }))
     .filter(point => Number.isFinite(point.x));
+}
+
+function renderGravityMap(gravityMap, spot) {
+  if (!gravityChart) return;
+
+  if (!gravityMap) {
+    gravityChart.$rawGravityData = null;
+    gravityChart.data.labels = [];
+    gravityChart.data.datasets[0].data = [];
+    gravityChart.data.datasets[1].data = [];
+    gravityChart.options.plugins.verticalLines = [];
+    gravityChart.update('none');
+    return;
+  }
+
+  const displayMap = getDisplayGravityMap(gravityMap, gravityChart);
+  const liveGravityPoints = getGravityPoints(displayMap.strikes, displayMap.liveGravityCurve);
+  const openingGravityPoints = getGravityPoints(displayMap.strikes, displayMap.openingGravityCurve);
+  gravityChart.$rawGravityData = {
+    strikes: displayMap.strikes,
+    liveGravityCurve: displayMap.liveGravityCurve,
+    openingGravityCurve: displayMap.openingGravityCurve
+  };
+  gravityChart.data.labels = [];
+
+  // Dataset 0: 实时引力
+  gravityChart.data.datasets[0].data = liveGravityPoints;
+  gravityChart.data.datasets[0].pointBackgroundColor = liveGravityPoints.map(() => 'rgba(255, 42, 95, 1)');
+  gravityChart.data.datasets[0].pointBorderColor = liveGravityPoints.map(() => 'rgba(255, 42, 95, 0.3)');
+
+  // Dataset 1: 开盘引力
+  gravityChart.data.datasets[1].data = openingGravityPoints;
+  gravityChart.data.datasets[1].pointBackgroundColor = openingGravityPoints.map(() => 'rgba(156, 163, 175, 0.85)');
+  gravityChart.data.datasets[1].pointBorderColor = openingGravityPoints.map(() => 'rgba(156, 163, 175, 0.25)');
+
+  const currentSpot = Number(spot);
+  gravityChart.options.plugins.verticalLines = Number.isFinite(currentSpot)
+    ? [{ value: currentSpot, color: 'rgba(245, 158, 11, 0.95)', lineWidth: 1, dash: [4, 4], label: 'Spot', offset: 12 }]
+    : [];
+
+  gravityChart.update('none');
 }
 
 function getRangeLabel(range) {
@@ -629,14 +644,22 @@ function bindMobileTooltipDismissal() {
 // 5. 网页实时拉取刷新函数
 // ==========================================
 
-function pollState() {
+function pollState(options = {}) {
   if (isReplaying) return; // 回放模式下挂起轮询请求，防止污染
 
   const ticker = tickerSelect.value;
-  fetchJson(`/api/gravity-state?ticker=${ticker}`)
+  const rangeFilter = document.getElementById('rangeFilter');
+  const range = rangeFilter.value;
+  fetchJson(`/api/gravity-state?ticker=${ticker}&range=${range}`)
     .then(state => {
+      const selectedRange = state.selectedRange || range;
+      if (rangeFilter.value !== selectedRange) {
+        rangeFilter.value = selectedRange;
+      }
       updateUIState(state);
-      if (state.isRunning || state.currentTime === '16:00:00') {
+      updateGravityChartTitle(ticker, selectedRange, state.gravityMap && state.gravityMap.date, state.gravityMap && state.gravityMap.time);
+      renderGravityMap(state.gravityMap, state.spot);
+      if (options.forceHistory || state.isRunning || state.currentTime === '16:00:00') {
         updateCharts();
       }
     })
@@ -918,47 +941,9 @@ function updateCharts() {
   const ticker = tickerSelect.value;
   const range = document.getElementById('rangeFilter').value;
 
-  fetchJson(`/api/gravity-map?ticker=${ticker}&range=${range}`)
-    .then(data => {
-      if (!gravityChart) return;
-
-      const displayMap = getDisplayGravityMap(data, gravityChart);
-      const liveGravityPoints = getGravityPoints(displayMap.strikes, displayMap.liveGravityCurve);
-      const openingGravityPoints = getGravityPoints(displayMap.strikes, displayMap.openingGravityCurve);
-      gravityChart.$rawGravityData = {
-        strikes: displayMap.strikes,
-        liveGravityCurve: displayMap.liveGravityCurve,
-        openingGravityCurve: displayMap.openingGravityCurve
-      };
-      gravityChart.data.labels = [];
-
-      // Dataset 0: 实时引力
-      gravityChart.data.datasets[0].data = liveGravityPoints;
-      gravityChart.data.datasets[0].pointBackgroundColor = liveGravityPoints.map(() => 'rgba(255, 42, 95, 1)');
-      gravityChart.data.datasets[0].pointBorderColor = liveGravityPoints.map(() => 'rgba(255, 42, 95, 0.3)');
-
-      // Dataset 1: 开盘引力
-      gravityChart.data.datasets[1].data = openingGravityPoints;
-      gravityChart.data.datasets[1].pointBackgroundColor = openingGravityPoints.map(() => 'rgba(156, 163, 175, 0.85)');
-      gravityChart.data.datasets[1].pointBorderColor = openingGravityPoints.map(() => 'rgba(156, 163, 175, 0.25)');
-
-      const currentSpot = parseFloat(spotVal.textContent.replace('$', ''));
-      gravityChart.options.plugins.verticalLines = [
-        { value: currentSpot, color: 'rgba(245, 158, 11, 0.95)', lineWidth: 1, dash: [4, 4], label: 'Spot', offset: 12 }
-      ];
-
-      gravityChart.update('none');
-    })
-    .catch(err => {
-      console.error('Failed to fetch gravity data:', err);
-      showErrorToast('加载引力数据失败');
-    });
-
   fetchJson(`/api/gravity-history?ticker=${ticker}&range=${range}`)
     .then(history => {
       if (!historyChart || history.length === 0) return;
-      const latestPoint = history[history.length - 1];
-      updateGravityChartTitle(ticker, range, latestPoint.date, latestPoint.time);
 
       const labels = history.map(h => h.time);
       const openingGravitySeries = history.map(h => getPointGravityMetrics(h).openingGravity / 1e6);

@@ -1,11 +1,9 @@
 const express = require('express');
 const gexService = require('../gexService');
-const marketScheduler = require('../marketScheduler');
 const gravityPresenter = require('../gravityPresenter');
 const datacenter = require('../datacenter');
-const timeUtils = require('../utils/timeUtils');
-const logger = require('../utils/logger')('gravity');
 const {
+  getClientGravityMap,
   getClientGravityState,
   getLatestHistoryForTicker,
   getLatestTradeDateWithData,
@@ -16,6 +14,7 @@ const router = express.Router();
 
 router.get('/gravity-state', async (req, res) => {
   const ticker = (req.query.ticker || 'AAPL').toUpperCase();
+  const range = gravityPresenter.getRequestedRange(req, 'today');
   const state = getTickerState(ticker);
   if (state) {
     if (!state.latestGex || !state.history || state.history.length === 0) {
@@ -23,6 +22,7 @@ router.get('/gravity-state', async (req, res) => {
       if (latestHistory.history.length > 0) {
         const lastPoint = latestHistory.history[latestHistory.history.length - 1];
         state.history = latestHistory.history;
+        state.historyDate = latestHistory.date;
         state.spot = lastPoint.spot || state.spot;
         state.latestGex = gexService.getPrimaryGexMetrics(lastPoint.gexData) || state.latestGex;
         if (lastPoint.gexData) {
@@ -36,47 +36,13 @@ router.get('/gravity-state', async (req, res) => {
       state.spot = quotePrices[ticker];
     }
   }
-  res.json(await getClientGravityState(ticker));
+  res.json(await getClientGravityState(ticker, range));
 });
 
 router.get('/gravity-map', async (req, res) => {
   const ticker = (req.query.ticker || 'AAPL').toUpperCase();
   const range = gravityPresenter.getRequestedRange(req);
-  const expiry = gravityPresenter.mapRangeToExpiry(range);
-  const todayStr = timeUtils.getEstDate();
-  const emptySummary = gravityPresenter.emptyMap();
-
-  const state = getTickerState(ticker);
-  if (!state) {
-    return res.json(emptySummary);
-  }
-
-  const spot = state.spot;
-  const isMarketClosed = state.currentTimeSeconds >= 16 * 3600 || marketScheduler.currentSystemRegime === 'IDLE';
-
-  if (state.gexSummary && state.gexSummary[expiry] && state.gexSummary[expiry].strikes && state.gexSummary[expiry].strikes.length > 0) {
-    return res.json(gravityPresenter.toMap(state.gexSummary[expiry]));
-  }
-
-  if (isMarketClosed) {
-    const latestHistory = getLatestHistoryForTicker(ticker);
-    if (latestHistory.history.length > 0) {
-      const lastPoint = latestHistory.history[latestHistory.history.length - 1];
-      if (lastPoint.gexData && lastPoint.gexData[expiry]) {
-        logger.info(`[Gravity API] Returned cached ${range} gravity map from ${latestHistory.date} history for ${ticker}.`);
-        return res.json(gravityPresenter.toMap(lastPoint.gexData[expiry]));
-      }
-    }
-  }
-
-  if (state.calculatedMatrix && state.calculatedMatrix.length > 0) {
-    const matrixViews = gexService.buildExpiryViews(state.calculatedMatrix, todayStr);
-    state.matrixViews = matrixViews;
-    state.gexSummary = gexService.buildGexSummaries(matrixViews, spot);
-    return res.json(gravityPresenter.toMap(state.gexSummary[expiry]) || emptySummary);
-  }
-
-  return res.json(emptySummary);
+  res.json(getClientGravityMap(ticker, range) || gravityPresenter.emptyMap());
 });
 
 router.get('/gravity-history', (req, res) => {
@@ -94,6 +60,7 @@ router.get('/gravity-history', (req, res) => {
       historyDate = latestHistory.date || historyDate;
       if (historyPoints.length > 0) {
         state.history = historyPoints;
+        state.historyDate = latestHistory.date;
         const lastPoint = historyPoints[historyPoints.length - 1];
         state.spot = lastPoint.spot || state.spot;
         state.latestGex = gexService.getPrimaryGexMetrics(lastPoint.gexData) || state.latestGex;

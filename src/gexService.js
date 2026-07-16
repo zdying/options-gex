@@ -22,6 +22,7 @@ const {
 } = require('./utils/optionChainAnalysisUtils');
 const pricingConfig = require('./pricingConfig');
 const logger = require('./utils/logger')('gex');
+const gravityInternalClient = require('./gravityInternalClient');
 
 const timeUtils = require('./utils/timeUtils');
 const datacenter = require('./datacenter');
@@ -588,6 +589,7 @@ async function updateChainAndRecalculate(ticker) {
   const alignedSec = Math.floor(state.currentTimeSeconds / 60) * 60;
 
   const newHistoryPoint = {
+    date: todayStr,
     time: minuteStr,
     sec: alignedSec,
     spot: state.spot,
@@ -609,6 +611,16 @@ async function updateChainAndRecalculate(ticker) {
 
   state.history = existingHistory;
   logger.info(`[LiveChain] Greeks recalculated for ${ticker}. Spot=$${state.spot}, History count: ${existingHistory.length}`);
+
+  try {
+    await gravityInternalClient.pushHistoryPoint({
+      ticker,
+      date: todayStr,
+      point: newHistoryPoint
+    });
+  } catch (e) {
+    logger.warn(`[GravityPush] Unexpected push error for ${ticker} ${minuteStr}: ${e.message}`);
+  }
 }
 
 module.exports = {

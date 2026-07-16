@@ -64,20 +64,21 @@ Authorization: Bearer <access_token>
 
 ### GET /api/gravity-state
 
-获取当前状态和顶部指标。
+获取当前状态、顶部指标和当前引力分布。前端实时视图应优先使用这个接口，不需要再额外请求 `/api/gravity-map`。
 
 请求：
 
 ```http
-GET /api/gravity-state?ticker=QQQ
+GET /api/gravity-state?ticker=QQQ&range=today
 Authorization: Bearer <access_token>
 ```
 
 参数：
 
-| 参数     | 必填 | 说明     |
-| -------- | ---- | -------- |
-| `ticker` | 否   | 标的代码 |
+| 参数     | 必填 | 可选值                   | 说明                                          |
+| -------- | ---- | ------------------------ | --------------------------------------------- |
+| `ticker` | 否   | 标的代码                 | 标的                                          |
+| `range`  | 否   | `all` / `today` / `near` | 图表周期；默认 `today`，无 0DTE 时会切到 `near` |
 
 返回：
 
@@ -105,6 +106,21 @@ Authorization: Bearer <access_token>
     "level": "中",
     "message": "引力位不是预测目标，而是需要重点观察的关键价格。",
     "reasons": []
+  },
+  "selectedRange": "today",
+  "gravityMap": {
+    "strikes": [540, 545, 550, 555, 560],
+    "liveGravityCurve": [-120, -50, 30, 80, 100],
+    "openingGravityCurve": [-90, -40, 20, 70, 95],
+    "openingGravity": 1200000000,
+    "liveGravity": 950000000,
+    "gravityShift": -250000000,
+    "openingUpperGravity": 560,
+    "openingLowerGravity": 545,
+    "openingGravityAxis": 552,
+    "upperGravity": 558,
+    "lowerGravity": 548,
+    "gravityAxis": 551
   }
 }
 ```
@@ -129,12 +145,14 @@ Authorization: Bearer <access_token>
 | `latestGravity.openingGravityAxis`  | number \| null | 开盘引力中轴               |
 | `gravityReference.score`            | number         | 参考分数                   |
 | `gravityReference.message`          | string         | 参考说明                   |
+| `selectedRange`                     | string         | 后端最终选择的图表周期     |
+| `gravityMap`                        | object \| null | 当前周期的引力分布         |
 
 ---
 
 ### GET /api/gravity-map
 
-获取当前引力分布。
+获取当前引力分布。该接口保留兼容旧调用；新前端应使用 `/api/gravity-state` 响应里的 `gravityMap`。
 
 请求：
 
@@ -266,17 +284,17 @@ Authorization: Bearer <access_token>
 
 ### 引力分布图
 
-使用 `/api/gravity-map`：
+使用 `/api/gravity-state` 响应里的 `gravityMap`：
 
 | 图表元素       | 字段                      |
 | -------------- | ------------------------- |
-| X 轴           | `strikes`                 |
-| 实时引力曲线   | `liveGravityCurve`        |
-| 开盘引力曲线   | `openingGravityCurve`     |
-| 当前价格竖线   | `/api/gravity-state.spot` |
-| 上方引力位竖线 | `upperGravity`            |
-| 下方引力位竖线 | `lowerGravity`            |
-| 引力中轴竖线   | `gravityAxis`             |
+| X 轴           | `gravityMap.strikes`                 |
+| 实时引力曲线   | `gravityMap.liveGravityCurve`        |
+| 开盘引力曲线   | `gravityMap.openingGravityCurve`     |
+| 当前价格竖线   | `spot`                              |
+| 上方引力位竖线 | `gravityMap.upperGravity`            |
+| 下方引力位竖线 | `gravityMap.lowerGravity`            |
+| 引力中轴竖线   | `gravityMap.gravityAxis`             |
 
 如果使用 Chart.js，曲线数据可转成 `{ x, y }`：
 
