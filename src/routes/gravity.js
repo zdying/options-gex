@@ -70,7 +70,7 @@ router.get('/gravity-history', (req, res) => {
   }
 
   const formattedHistory = historyPoints.map(h => {
-    const gravityMap = gravityPresenter.mapForHistoryPoint(h, range);
+    const gravityMap = gravityPresenter.mapForHistoryPoint(h, range, historyPoints);
     const gravityMetrics = gravityPresenter.metricsForHistoryPoint(h, range);
     return {
       time: h.time,

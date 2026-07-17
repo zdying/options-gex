@@ -171,12 +171,17 @@ function hasRangeData(point, range) {
   );
 }
 
-function buildPayload(ticker, date, point, range, stateRange) {
+function buildPayload(ticker, date, point, range, stateRange, history) {
   const sourceKey = RANGE_TO_SOURCE[range];
   const stateSourceKey = RANGE_TO_SOURCE[stateRange];
   const source = point.gexData[sourceKey];
   const stateSource = point.gexData[stateSourceKey] || source;
-  const snapshot = gravityPresenter.toMap(source);
+  const snapshot = gravityPresenter.toMap(source, {
+    spot: point && point.spot,
+    currentSec: point && point.sec,
+    expiry: sourceKey,
+    history
+  });
   const latestGravity = gravityPresenter.toMetrics(stateSource);
 
   return {
@@ -221,7 +226,7 @@ function buildJobs(options) {
           ticker,
           range,
           time: point.time,
-          payload: buildPayload(ticker, options.date, point, range, options.stateRange)
+          payload: buildPayload(ticker, options.date, point, range, options.stateRange, history)
         });
         if (options.limit > 0 && jobs.length >= options.limit) {
           return { jobs, skipped };

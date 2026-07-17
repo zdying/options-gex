@@ -53,13 +53,18 @@ function formatCurrentTime(point) {
   return '09:30:00';
 }
 
-function buildPayload({ ticker, date, point, range }) {
+function buildPayload({ ticker, date, point, range, history }) {
   const sourceKey = RANGE_TO_SOURCE[range];
   const source = point && point.gexData && point.gexData[sourceKey];
   if (!hasGravityMap(source)) return null;
 
   const stateSource = getStateSource(point, source);
-  const snapshot = gravityPresenter.toMap(source);
+  const snapshot = gravityPresenter.toMap(source, {
+    spot: point && point.spot,
+    currentSec: point && point.sec,
+    expiry: sourceKey,
+    history
+  });
 
   return {
     ticker,
@@ -110,11 +115,11 @@ async function postPayload(payload) {
   }
 }
 
-async function pushHistoryPoint({ ticker, date, point }) {
+async function pushHistoryPoint({ ticker, date, point, history }) {
   if (!GRAVITY_PUSH_CONFIG.enabled) return;
 
   const payloads = GRAVITY_PUSH_CONFIG.ranges
-    .map(range => buildPayload({ ticker, date, point, range }))
+    .map(range => buildPayload({ ticker, date, point, range, history }))
     .filter(Boolean);
 
   if (payloads.length === 0) {

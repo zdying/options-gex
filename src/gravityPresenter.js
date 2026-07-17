@@ -1,3 +1,5 @@
+const { buildGravityRoles } = require('./gravityRoles');
+
 function mapRangeToExpiry(range = 'all') {
   const normalized = String(range || 'all').toLowerCase();
   if (normalized === 'today') return '0dte';
@@ -68,7 +70,7 @@ function toMetrics(source = {}) {
   };
 }
 
-function toMap(source = {}) {
+function toMap(source = {}, context = {}) {
   source = source || {};
   return {
     strikes: roundNumberArray(source.strikes),
@@ -77,6 +79,7 @@ function toMap(source = {}) {
     // Raw GEX arrays are intentionally not exposed through gravity presenter payloads.
     // liveGravityRaw: Array.isArray(source.strikeGexRealtime) ? source.strikeGexRealtime : [],
     // openingGravityRaw: Array.isArray(source.strikeGexGlobal) ? source.strikeGexGlobal : [],
+    gravityRoles: buildGravityRoles(source, context),
     ...toMetrics(source)
   };
 }
@@ -99,10 +102,15 @@ function metricsForHistoryPoint(historyPoint, range = 'all') {
   return toMetrics(source);
 }
 
-function mapForHistoryPoint(historyPoint, range = 'all') {
+function mapForHistoryPoint(historyPoint, range = 'all', history = null) {
   const expiry = mapRangeToExpiry(range);
   const source = historyPoint && historyPoint.gexData && historyPoint.gexData[expiry];
-  return source ? toMap(source) : null;
+  return source ? toMap(source, {
+    spot: historyPoint && historyPoint.spot,
+    currentSec: historyPoint && historyPoint.sec,
+    expiry,
+    history
+  }) : null;
 }
 
 function statePayload(input = {}, fallbackTicker = 'SPY') {

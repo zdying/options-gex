@@ -117,6 +117,15 @@ function withGravityMapMeta(map, meta = {}) {
   };
 }
 
+function mapWithRoles(source, context = {}) {
+  return gravityPresenter.toMap(source, {
+    spot: context.spot,
+    currentSec: context.sec,
+    expiry: context.expiry,
+    history: context.history
+  });
+}
+
 function getClientGravityMap(ticker, range = 'all') {
   const selectedRange = gravityPresenter.normalizeRange(range, 'all');
   const expiry = gravityPresenter.mapRangeToExpiry(selectedRange);
@@ -129,11 +138,18 @@ function getClientGravityMap(ticker, range = 'all') {
 
   if (state.gexSummary && state.gexSummary[expiry] && state.gexSummary[expiry].strikes && state.gexSummary[expiry].strikes.length > 0) {
     const latestPoint = getLatestHistoryPointForExpiry(state, expiry);
-    return withGravityMapMeta(gravityPresenter.toMap(state.gexSummary[expiry]), {
+    const mapSpot = latestPoint ? latestPoint.spot : spot;
+    const mapSec = latestPoint ? latestPoint.sec : state.currentTimeSeconds;
+    return withGravityMapMeta(mapWithRoles(state.gexSummary[expiry], {
+      spot: mapSpot,
+      sec: mapSec,
+      expiry,
+      history: state.history
+    }), {
       date: (latestPoint && latestPoint.date) || state.historyDate || todayStr,
       time: latestPoint && latestPoint.time,
-      sec: latestPoint ? latestPoint.sec : state.currentTimeSeconds,
-      spot: latestPoint ? latestPoint.spot : spot
+      sec: mapSec,
+      spot: mapSpot
     });
   }
 
@@ -143,7 +159,12 @@ function getClientGravityMap(ticker, range = 'all') {
       const lastPoint = latestHistory.history[latestHistory.history.length - 1];
       if (lastPoint.gexData && lastPoint.gexData[expiry]) {
         logger.info(`[Gravity API] Returned cached ${selectedRange} gravity map from ${latestHistory.date} history for ${ticker}.`);
-        return withGravityMapMeta(gravityPresenter.toMap(lastPoint.gexData[expiry]), {
+        return withGravityMapMeta(mapWithRoles(lastPoint.gexData[expiry], {
+          spot: lastPoint.spot,
+          sec: lastPoint.sec,
+          expiry,
+          history: latestHistory.history
+        }), {
           date: lastPoint.date || latestHistory.date,
           time: lastPoint.time,
           sec: lastPoint.sec,
@@ -157,7 +178,12 @@ function getClientGravityMap(ticker, range = 'all') {
     const matrixViews = gexService.buildExpiryViews(state.calculatedMatrix, todayStr);
     state.matrixViews = matrixViews;
     state.gexSummary = gexService.buildGexSummaries(matrixViews, spot);
-    const map = gravityPresenter.toMap(state.gexSummary[expiry]);
+    const map = mapWithRoles(state.gexSummary[expiry], {
+      spot,
+      sec: state.currentTimeSeconds,
+      expiry,
+      history: state.history
+    });
     return hasGravityMapData(map)
       ? withGravityMapMeta(map, {
         date: todayStr,

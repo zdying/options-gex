@@ -73,6 +73,35 @@ function formatWall(value) {
   return Number.isFinite(num) ? `$${num.toFixed(num >= 100 ? 0 : 2)}` : '--';
 }
 
+function formatRoleStrike(role) {
+  const strike = Number(role && role.strike);
+  return Number.isFinite(strike) ? `$${strike.toFixed(strike >= 100 ? 0 : 2)}` : '--';
+}
+
+function buildGravityRoleNote(roles) {
+  if (!roles) {
+    return '引力位不是单一目标价。价格站上后可能变成支撑，贴近时可能变成定锚区。';
+  }
+
+  const trendLabel = roles.trend && roles.trend.label ? roles.trend.label : '方向不足';
+  const magnet = formatRoleStrike(roles.magnetTarget);
+  const support = formatRoleStrike(roles.supportPole);
+  const pin = formatRoleStrike(roles.pin);
+  const structure = roles.structure || {};
+  const structureScore = Number(structure.score);
+  const structureText = Number.isFinite(structureScore)
+    ? `结构清晰度: ${Math.round(structureScore)}分，${structure.label || '结构一般'}。`
+    : '';
+
+  return `当前牵引目标: ${magnet}; 下方支撑磁极: ${support}; 现价定锚区: ${pin}。价格方向: ${trendLabel}。${structureText}引力位会随价格位置切换为牵引、支撑或定锚。`;
+}
+
+function updateGravityRolePanel(roles) {
+  statusBadge.textContent = '引力角色';
+  statusBadge.className = 'status-badge badge-neutral';
+  modelNoteContent.textContent = buildGravityRoleNote(roles);
+}
+
 function getReferenceCardClass(score) {
   if (score >= 80) return 'glass-panel metric-card green';
   if (score >= 50) return 'glass-panel metric-card gold';
@@ -486,6 +515,7 @@ function renderReplayFrame() {
   const gravityMap = point.gravityMap || null;
   updateGravityChartTitle(tickerSelect.value, range, point.date, point.time);
   renderGravityMap(gravityMap, point.spot);
+  updateGravityRolePanel(gravityMap && gravityMap.gravityRoles);
 
   // 5. 更新时序图（只绘制到当前播放进度，实现折线向右流动的效果）
   if (historyChart) {
@@ -514,6 +544,34 @@ function getGravityPoints(strikes, values) {
       y: Number(values[index]) || 0
     }))
     .filter(point => Number.isFinite(point.x));
+}
+
+function getGravityRoleLines(gravityMap) {
+  const roles = gravityMap && gravityMap.gravityRoles;
+  if (!roles) return [];
+
+  const lines = [];
+  const seen = new Set();
+  const addRoleLine = (role, label, color, offset) => {
+    const value = Number(role && role.strike);
+    if (!Number.isFinite(value)) return;
+    const key = String(value);
+    if (seen.has(key)) return;
+    seen.add(key);
+    lines.push({
+      value,
+      color,
+      lineWidth: 1,
+      dash: [2, 3],
+      label,
+      offset
+    });
+  };
+
+  addRoleLine(roles.magnetTarget, 'Target', 'rgba(56, 189, 248, 0.95)', 24);
+  addRoleLine(roles.supportPole, 'Support', 'rgba(34, 197, 94, 0.95)', 36);
+  addRoleLine(roles.pin, 'Pin', 'rgba(236, 72, 153, 0.95)', 48);
+  return lines;
 }
 
 function renderGravityMap(gravityMap, spot) {
@@ -550,9 +608,13 @@ function renderGravityMap(gravityMap, spot) {
   gravityChart.data.datasets[1].pointBorderColor = openingGravityPoints.map(() => 'rgba(156, 163, 175, 0.25)');
 
   const currentSpot = Number(spot);
-  gravityChart.options.plugins.verticalLines = Number.isFinite(currentSpot)
+  const spotLines = Number.isFinite(currentSpot)
     ? [{ value: currentSpot, color: 'rgba(245, 158, 11, 0.95)', lineWidth: 1, dash: [4, 4], label: 'Spot', offset: 12 }]
     : [];
+  gravityChart.options.plugins.verticalLines = [
+    ...spotLines,
+    ...getGravityRoleLines(gravityMap)
+  ];
 
   gravityChart.update('none');
 }
@@ -693,9 +755,7 @@ function updateUIState(state) {
   gravityAxisVal.textContent = `引力中轴: ${formatWall(gravity.gravityAxis)}`;
   influenceCard.className = (gravity.openingGravity || 0) >= 0 ? 'glass-panel metric-card green' : 'glass-panel metric-card rose';
   wallsCard.className = (gravity.liveGravity || 0) >= 0 ? 'glass-panel metric-card cyan' : 'glass-panel metric-card rose';
-  statusBadge.textContent = '引力流';
-  statusBadge.className = 'status-badge badge-neutral';
-  modelNoteContent.textContent = '引力流为模型估算值，引力位不是预测目标，而是需要重点观察的关键价格。';
+  updateGravityRolePanel(state.gravityMap && state.gravityMap.gravityRoles);
 }
 
 // ==========================================

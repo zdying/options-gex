@@ -41,6 +41,8 @@ const { fetchQuotePrices } = datacenter;
 const store = new PositionStore(pricingConfig);
 const gexAggregator = new GexAggregator(pricingConfig);
 const GEX_STRIKE_RADIUS = 20;
+const MARKET_HISTORY_START_SEC = 9 * 3600 + 30 * 60;
+const MARKET_HISTORY_END_SEC = 16 * 3600;
 
 // ==========================================
 // 2. 全局内存状态容器
@@ -661,43 +663,56 @@ async function updateChainAndRecalculate(ticker, options = {}) {
 
   const minuteStr = timeNowStr.substring(0, 5);
   const alignedSec = Math.floor(state.currentTimeSeconds / 60) * 60;
-
-  const newHistoryPoint = {
-    date: todayStr,
-    time: minuteStr,
-    sec: alignedSec,
-    spot: state.spot,
-    ...state.latestGex,
-    gexData: gexSummary
-  };
-
+  const isRegularMarketTime = state.currentTimeSeconds >= MARKET_HISTORY_START_SEC
+    && state.currentTimeSeconds < MARKET_HISTORY_END_SEC;
   const existingHistory = Array.isArray(state.history) ? state.history : [];
-  const existingIdx = existingHistory.findIndex(h => h.time === minuteStr);
-  if (existingIdx !== -1) {
-    existingHistory[existingIdx] = newHistoryPoint;
+  let newHistoryPoint = null;
+
+  if (isRegularMarketTime) {
+    newHistoryPoint = {
+      date: todayStr,
+      time: minuteStr,
+      sec: alignedSec,
+      spot: state.spot,
+      ...state.latestGex,
+      gexData: gexSummary
+    };
+
+    const existingIdx = existingHistory.findIndex(h => h.time === minuteStr);
+    if (existingIdx !== -1) {
+      existingHistory[existingIdx] = newHistoryPoint;
+    } else {
+      existingHistory.push(newHistoryPoint);
+    }
+
+    existingHistory.sort((a, b) => a.sec - b.sec);
+
+    const writeHistoryStartedAt = Date.now();
+    state.history = existingHistory;
+    enqueueHistoryWrite(ticker, historyPath, existingHistory.slice());
+    timings.writeHistory = Date.now() - writeHistoryStartedAt;
+    logger.info(`[LiveChain] Greeks recalculated for ${ticker}. Spot=$${state.spot}, History count: ${existingHistory.length}`);
   } else {
-    existingHistory.push(newHistoryPoint);
+    timings.writeHistory = 0;
+    logger.info(`[LiveChain] Greeks recalculated for ${ticker}. Spot=$${state.spot}. Skipped history write at ${timeNowStr} outside regular market hours.`);
   }
 
-  existingHistory.sort((a, b) => a.sec - b.sec);
-
-  const writeHistoryStartedAt = Date.now();
-  state.history = existingHistory;
-  enqueueHistoryWrite(ticker, historyPath, existingHistory.slice());
-  timings.writeHistory = Date.now() - writeHistoryStartedAt;
-  logger.info(`[LiveChain] Greeks recalculated for ${ticker}. Spot=$${state.spot}, History count: ${existingHistory.length}`);
-
   const pushStartedAt = Date.now();
-  try {
-    await gravityInternalClient.pushHistoryPoint({
-      ticker,
-      date: todayStr,
-      point: newHistoryPoint
-    });
-    timings.pushGravity = Date.now() - pushStartedAt;
-  } catch (e) {
-    timings.pushGravity = Date.now() - pushStartedAt;
-    logger.warn(`[GravityPush] Unexpected push error for ${ticker} ${minuteStr}: ${e.message}`);
+  if (newHistoryPoint) {
+    try {
+      await gravityInternalClient.pushHistoryPoint({
+        ticker,
+        date: todayStr,
+        point: newHistoryPoint,
+        history: existingHistory
+      });
+      timings.pushGravity = Date.now() - pushStartedAt;
+    } catch (e) {
+      timings.pushGravity = Date.now() - pushStartedAt;
+      logger.warn(`[GravityPush] Unexpected push error for ${ticker} ${minuteStr}: ${e.message}`);
+    }
+  } else {
+    timings.pushGravity = 0;
   }
 
   timings.total = Date.now() - updateStartedAt;
