@@ -12,7 +12,6 @@ const { fetchOptionChainUntilExpiration } = require('./benzingaOptionChainStream
 dns.setDefaultResultOrder('ipv4first');
 
 logger.info(`Using Benzinga Token: ${env.BENZINGA_COOKIE}`);
-logger.info(`Using KairAlert server host: ${env.KA_SERVER_HOST}`);
 
 const OPTION_CHAIN_TIMEOUT_MS = 20000;
 const OPTION_CHAIN_MAX_RETRIES = 3;
@@ -216,7 +215,7 @@ async function fetchProPlusUsers() {
     throw new Error('PRO_PLUS_USERS_AUTHORIZATION is not configured');
   }
 
-  const host = env.KA_SERVER_HOST || 'https://app.kairalert.pro';
+  const host = 'https://app.kairalert.pro';
   const url = `${host}/api/internal/pro-plus-users`;
 
   const response = await fetchWithRetry(url, {

@@ -14,9 +14,33 @@ const PORT = process.env.PORT || 3080;
 const SSL_KEY_PATH = process.env.SSL_KEY_PATH || path.join(__dirname, '../certs/server.key');
 const SSL_CERT_PATH = process.env.SSL_CERT_PATH || path.join(__dirname, '../certs/server.crt');
 
+function originMatchesAllowed(origin, allowedOrigin) {
+  if (origin === allowedOrigin) return true;
+  if (!allowedOrigin || !allowedOrigin.endsWith(':*')) return false;
+
+  try {
+    const originUrl = new URL(origin);
+    const allowedUrl = new URL(allowedOrigin.slice(0, -2));
+    return originUrl.protocol === allowedUrl.protocol &&
+      originUrl.hostname === allowedUrl.hostname;
+  } catch (error) {
+    return false;
+  }
+}
+
+function isAllowedCorsOrigin(origin) {
+  if (!origin) return false;
+  const allowedOrigins = Array.isArray(env.CORS_ALLOWED_ORIGINS) ? env.CORS_ALLOWED_ORIGINS : [];
+  return allowedOrigins.some(allowedOrigin => originMatchesAllowed(origin, allowedOrigin));
+}
+
 app.use((req, res, next) => {
   res.setHeader('X-Powered-By', 'KA_2.0');
-  res.setHeader('Access-Control-Allow-Origin', env.KA_SERVER_HOST || 'https://app.kairalert.pro');
+  const origin = req.headers.origin;
+  if (isAllowedCorsOrigin(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+  }
   res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   if (req.method === 'OPTIONS') {
@@ -52,7 +76,7 @@ https.createServer(httpsOptions, app).listen(PORT, () => {
   logger.info(`==========================================`);
   logger.info(`GEX Structure Engine is running at:`);
   logger.info(`https://localhost:${PORT}`);
-  logger.info(`Using KairAlert server host: ${env.KA_SERVER_HOST}`);
+  logger.info(`Allowed CORS origins: ${env.CORS_ALLOWED_ORIGINS.join(', ')}`);
   logger.info(`==========================================`);
 });
 
