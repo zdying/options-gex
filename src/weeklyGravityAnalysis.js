@@ -16,7 +16,7 @@ const {
 } = require('./utils/optionChainAnalysisUtils');
 const { getExpirationDayDiff } = require('./utils/sharedUtils');
 
-const BASE_DATE = '2026-07-10';
+const BASE_DATE = '2026-07-17';
 const CALC_TIME = '15:59:50';
 const OUTPUT_DIR = path.join(__dirname, '../data/weekly-gravity', BASE_DATE);
 const SPOT_RETRIES = 3;

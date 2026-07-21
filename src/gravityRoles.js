@@ -4,6 +4,7 @@
  */
 
 const { buildStructure } = require('./gravityStructure');
+const { buildPriceContext } = require('./priceContext');
 
 const ROLE_DISTANCE_PCT = 0.03;
 const DISTANCE_WEIGHT_PCT = 0.015;
@@ -249,15 +250,32 @@ function hasTargetSwitchConfirmation(candidate, marketContext) {
   return lastDistance < firstDistance && closerCount >= Math.max(1, window.length - 2);
 }
 
-function pickMagnetTarget(trend, pin, holdAnchor, upper, lower, marketContext) {
-  if (trend.direction === 'down') {
+function getTargetDirection(trend, priceContext) {
+  if (priceContext && priceContext.available) {
+    return {
+      direction: priceContext.direction,
+      label: priceContext.label,
+      confidence: priceContext.confidence,
+      source: 'priceContext'
+    };
+  }
+  return {
+    direction: trend.direction,
+    label: trend.label,
+    confidence: null,
+    source: 'trend'
+  };
+}
+
+function pickMagnetTarget(targetDirection, pin, holdAnchor, upper, lower, marketContext) {
+  if (targetDirection.direction === 'down') {
     if (holdAnchor) return holdAnchor;
     if (pin) return pin;
     if (lower && hasTargetSwitchConfirmation(lower, marketContext)) return lower;
-    return upper || lower;
+    return lower || upper;
   }
 
-  if (trend.direction === 'up') {
+  if (targetDirection.direction === 'up') {
     if (holdAnchor && holdAnchor.distanceRatio >= 0) return holdAnchor;
     if (pin && pin.distanceRatio >= 0) return pin;
     return upper || pin || lower;
@@ -297,8 +315,10 @@ function magnetReason(candidate, pin) {
 function buildGravityRoles(summary = {}, context = {}) {
   const spot = finite(context.spot, NaN);
   if (!Number.isFinite(spot) || spot <= 0) {
+    const priceContext = buildPriceContext(context);
     return {
       trend: calculateTrend(context),
+      priceContext,
       structure: buildStructure(summary, spot, context),
       magnetTarget: null,
       supportPole: null,
@@ -310,6 +330,8 @@ function buildGravityRoles(summary = {}, context = {}) {
 
   const marketContext = buildMarketContext(summary, spot, context);
   const trend = calculateTrend({ ...context, spot });
+  const priceContext = buildPriceContext({ ...context, spot });
+  const targetDirection = getTargetDirection(trend, priceContext);
   const structure = buildStructure(summary, spot, context);
   const rows = buildRows(summary, spot, marketContext);
   const inRoleRange = row => Math.abs(row.distanceRatio) <= ROLE_DISTANCE_PCT;
@@ -317,7 +339,7 @@ function buildGravityRoles(summary = {}, context = {}) {
   const holdAnchor = pickBest(rows, row => isInHoldBand(row) && row.strength >= ACTIVE_HOLD_MIN_STRENGTH);
   const upper = pickBest(rows, row => row.strike > spot && inRoleRange(row));
   const lower = pickBest(rows, row => row.strike < spot && inRoleRange(row));
-  const magnet = pickMagnetTarget(trend, pin, holdAnchor, upper, lower, marketContext);
+  const magnet = pickMagnetTarget(targetDirection, pin, holdAnchor, upper, lower, marketContext);
   const support = lower;
 
   return {
@@ -325,6 +347,10 @@ function buildGravityRoles(summary = {}, context = {}) {
       ...trend,
       recentRangePct: round(marketContext.recentRangeRatio * 100, 2),
       strikeSpacingPct: round(marketContext.strikeSpacingRatio * 100, 2)
+    },
+    priceContext: {
+      ...priceContext,
+      targetDirection
     },
     structure,
     magnetTarget: formatCandidate(

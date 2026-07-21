@@ -38,6 +38,7 @@ today | near | all
     "openingGravityCurve": [54.1, 65.2, 210.83, 48.39, 128.72],
     "gravityRoles": {
       "trend": {},
+      "priceContext": {},
       "structure": {},
       "magnetTarget": {},
       "supportPole": {},
@@ -61,6 +62,7 @@ today | near | all
 | `upperMagnetTarget` | 上方候选引力 | 不考虑最终角色选择时，现价上方的候选强引力位。 |
 | `lowerMagnetTarget` | 下方候选引力 | 不考虑最终角色选择时，现价下方的候选强引力位。 |
 | `trend` | 价格短线方向 | 用已有历史价格估算的 5/15 分钟方向。 |
+| `priceContext` | 价格上下文 | 综合价格结构、VWAP和短周期动量，给牵引目标选择提供方向偏向。 |
 | `structure` | 结构清晰度 | 独立的图形清晰度评分。不参与 Target/Support/Pin 的计算。 |
 
 重要语义：
@@ -68,6 +70,7 @@ today | near | all
 - `Target` 表示“目标观察位”，不是“100% 必到价”。
 - `Support` 表示“下方承接观察位”，不是“必然守住”。
 - `Pin` 表示“当前附近容易吸附或拉扯”，不是永久固定。
+- `priceContext` 只决定优先观察上方还是下方，不会把支撑/阻力/定锚的基础语义直接改写。
 - `structure.score` 只用于辅助判断这张图是否清晰，不会改变角色点位。
 
 ## trend 字段
@@ -100,6 +103,105 @@ today | near | all
 
 - 刚开盘前几分钟历史不足，`pct5m`、`pct15m` 会使用已有最早价格兜底，参考价值较弱。
 - `trend` 是短线方向，不等于全天趋势。
+
+## priceContext 字段
+
+`priceContext` 是轻量价格上下文层。它不是引力位，也不是交易信号，只回答：
+
+```txt
+当前价格更偏向先试上方，先试下方，还是继续拉扯。
+```
+
+示例：
+
+```json
+{
+  "available": true,
+  "state": "Bullish",
+  "direction": "up",
+  "label": "偏多",
+  "score": 0.36,
+  "confidence": 55,
+  "coverage": 0.67,
+  "invalidation": "跌破近端低点327.1",
+  "marketState": {
+    "type": "range_breakout_up_attempt",
+    "label": "箱体上破尝试",
+    "direction": "up",
+    "box": {
+      "high": 330.5,
+      "low": 328.9,
+      "durationMinutes": 14
+    }
+  },
+  "targetDirection": {
+    "direction": "up",
+    "label": "偏多",
+    "confidence": 55,
+    "source": "priceContext"
+  },
+  "modules": {
+    "marketState": {},
+    "structure": {},
+    "movingAverage": {},
+    "vwap": {},
+    "momentum": {}
+  }
+}
+```
+
+字段说明：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `available` | boolean | 是否至少有一个价格模块可用。 |
+| `state` | string | 方向状态：`Strong Bullish`、`Bullish`、`Neutral`、`Bearish`、`Strong Bearish`。 |
+| `direction` | string | 简化方向：`up`、`down`、`flat`。 |
+| `label` | string | 中文展示：`强偏多`、`偏多`、`中性/拉扯`、`偏空`、`强偏空`。 |
+| `score` | number | 综合分，范围 `-1` 到 `1`。正数偏多，负数偏空。 |
+| `rawScore` | number | 未经价格状态机约束前的原始加权分。调试用。 |
+| `confidence` | number | 当前方向偏向置信度，范围 `0-100`。数据覆盖不足时会降低。 |
+| `coverage` | number | 可用模块覆盖率。当前模块为价格状态、价格结构、均线、VWAP、动量。 |
+| `marketState` | object | 当前价格状态机结果，如高位横盘、低位横盘、箱体上破尝试/确认、箱体下破尝试/确认、突破失败、趋势段等。 |
+| `invalidation` | string | 当前方向偏向的失效观察条件。 |
+| `targetDirection` | object | 牵引目标选择实际采用的方向来源。`source` 为 `priceContext` 或 `trend`。 |
+| `modules.marketState` | object | 与 `marketState` 相同，放在模块列表里方便统一调试。 |
+| `modules.structure` | object | HH/HL、LH/LL、前高/前低、区间上下沿突破。 |
+| `modules.movingAverage` | object | EMA20/EMA60位置、排列、斜率、缠绕和回踩/反抽反应。 |
+| `modules.vwap` | object | VWAP上方/下方、VWAP斜率、回踩/反抽反应。缺少VWAP或成交量时为不可用。 |
+| `modules.momentum` | object | 最近3/5/10分钟收益率，若有OHLC则额外看K线实体和收盘位置。 |
+
+`marketState` 会优先约束方向分数：箱体内通常压回中性，箱体上破/下破才明显转向。当前没有实现 W底、M顶、头肩等复杂形态。后续加形态时，应放在 `priceContext.modules.patterns` 并区分 `forming`、`triggered`、`confirmed`、`failed`。
+
+`marketState` 默认会做轻量状态平滑：失败状态立即生效；确认/延续类状态直接生效；其他新状态需要最近几根 1 分钟 K 里有同类支持，否则会短暂保持上一稳定状态。调试字段如下：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `smoothed` | boolean | 当前输出是否经过状态保持或标签平滑。 |
+| `rawType` | string | 平滑前的原始 `marketState.type`。 |
+| `rawLabel` | string | 平滑前的原始中文标签。 |
+| `smoothingReason` | string/null | 状态被保持或标签被平滑的原因。 |
+
+如需回测原始状态，可在构建 `priceContext` 时传入 `stateSmoothing: false`。
+
+### marketState.type 枚举
+
+| type | label | 含义 |
+| --- | --- | --- |
+| `range_rotation` | `高位横盘` / `低位横盘` / `中位横盘` | 价格仍在箱体内，优先观察上下沿，不急着给强方向。 |
+| `range_breakout_up_attempt` | `箱体上破尝试` | 价格首次或短暂站到箱体上沿上方。 |
+| `range_breakout_up_confirmed` | `箱体上破确认` | 价格连续站在箱体上沿上方。 |
+| `range_breakout_up_retest` | `上破后回踩` | 上破确认后回踩箱体上沿附近，观察能否守住。 |
+| `range_breakout_up_continuation` | `上破后延续` | 上破后仍保留大部分突破幅度，并继续向上释放。 |
+| `range_breakdown_down_attempt` | `箱体下破尝试` | 价格首次或短暂跌到箱体下沿下方。 |
+| `range_breakdown_down_confirmed` | `箱体下破确认` | 价格连续压在箱体下沿下方。 |
+| `range_breakdown_down_retest` | `下破后反抽` | 下破确认后反抽箱体下沿附近，观察能否重新压回。 |
+| `range_breakdown_down_continuation` | `下破后延续` | 下破后仍保留大部分跌破幅度，并继续向下释放。 |
+| `range_breakout_up_failed` | `向上突破失败` | 上破后重新跌回箱体内。 |
+| `range_breakdown_down_failed` | `向下跌破失败` | 下破后重新收回箱体内。 |
+| `trend_up` | `上涨段` | 没有有效箱体时，价格结构、均线或动量共同偏上。 |
+| `trend_down` | `下跌段` | 没有有效箱体时，价格结构、均线或动量共同偏下。 |
+| `range_tug` | `拉扯观察` | 暂无清晰趋势或有效箱体。 |
 
 ## structure 字段
 
@@ -385,4 +487,3 @@ AMD 仍然会返回 Target/Support/Pin，
 4. `Pin`、`Support`、`Target` 会随着现价移动和 GEX 曲线变化而切换。
 5. 其他 APP 做 UI 时，建议优先展示 `strike`、`label`、`score`，调试页再展示 `dominance`、`strongPeakCount`、`signFlipCount`。
 6. 所有角色对象都可能为 `null`，必须做空值保护。
-

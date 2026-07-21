@@ -83,7 +83,11 @@ function buildGravityRoleNote(roles) {
     return '引力位不是单一目标价。价格站上后可能变成支撑，贴近时可能变成定锚区。';
   }
 
-  const trendLabel = roles.trend && roles.trend.label ? roles.trend.label : '方向不足';
+  const priceContext = roles.priceContext || {};
+  const marketStateLabel = priceContext.marketState && priceContext.marketState.label;
+  const trendLabel = priceContext.label
+    ? `${priceContext.label}${marketStateLabel ? `（${marketStateLabel}）` : ''}${Number.isFinite(Number(priceContext.confidence)) ? `，置信度${Math.round(Number(priceContext.confidence))}%` : ''}`
+    : (roles.trend && roles.trend.label ? roles.trend.label : '方向不足');
   const magnet = formatRoleStrike(roles.magnetTarget);
   const support = formatRoleStrike(roles.supportPole);
   const pin = formatRoleStrike(roles.pin);
