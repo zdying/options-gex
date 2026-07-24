@@ -7,14 +7,14 @@ KairAlert Gravity Map SVG 渲染模块。
 --------
 build_scenario_svg(
     ticker,             # 股票代码，如 "AMD"
-    scenario_title,     # 场景标题，如 "Magnet Traversal to $500"
-    anchor_time_str,    # K 线锚定时间 (HH:MM EDT)，用于选取 120 根 K 线窗口
+    scenario_title,     # 场景标题，如“向 $500 引力区运行”
+    anchor_time_str,    # K 线锚定时间 (HH:MM EDT)，用于选取 150 根 K 线窗口
     key_events,         # 事件标注列表，每项: {"time":"HH:MM","label":"...","color":"#hex"}
     date_str,           # 数据日期，如 "2026-07-20"
     base_live_dir,      # live_data 根目录，下含 {ticker}/history.json
     base_1min_dir,      # tipranks_1min 根目录，下含 {ticker}.json
     logo_svg_path=None, # KairAlert Logo.svg 路径（可选）
-    target_bars=120,    # K 线数量（默认 120）
+    target_bars=150,    # K 线数量（默认 150）
 ) -> str               # 返回完整 SVG 字符串
 
 render_and_save(
@@ -22,7 +22,7 @@ render_and_save(
     date_str, base_live_dir, base_1min_dir,
     output_paths,       # List[str]，SVG 保存路径列表
     logo_svg_path=None,
-    target_bars=120,
+    target_bars=150,
 ) -> str               # 保存并返回 SVG 字符串
 
 用法示例（在其他脚本中调用）
@@ -31,11 +31,11 @@ from gravity_chart import build_scenario_svg, render_and_save
 
 svg_str = build_scenario_svg(
     ticker="AAPL",
-    scenario_title="Break VWAP & Touch $325 Support Rebound",
+    scenario_title="跌破 VWAP 后测试 $325 支撑",
     anchor_time_str="09:50",
     key_events=[
-        {"time": "09:50", "label": "09:50 Break VWAP Down", "color": "#dc2626"},
-        {"time": "10:24", "label": "10:24 Touch $325 Support", "color": "#16a34a"},
+        {"time": "09:50", "label": "09:50 跌破 VWAP", "color": "#dc2626"},
+        {"time": "10:24", "label": "10:24 测试 $325 支撑", "color": "#16a34a"},
     ],
     date_str="2026-07-20",
     base_live_dir="/path/to/data/live_data/2026-07-20",
@@ -90,11 +90,15 @@ def fmt_strike(val, digits=1):
 def _svg_text(x, y, text, size=14, weight=400, fill="#0f172a", anchor="start"):
     return (
         f'<text x="{x:.2f}" y="{y:.2f}" '
-        f'font-family="Inter, Arial, sans-serif" '
+        f'font-family="MiSans, Noto Sans CJK SC, PingFang SC, Microsoft YaHei, Inter, Arial, sans-serif" '
         f'font-size="{size}" font-weight="{weight}" '
         f'fill="{fill}" text-anchor="{anchor}">'
         f'{escape(str(text))}</text>'
     )
+
+
+def _estimated_text_width(value):
+    return sum(10 if ord(char) > 127 else 6 for char in str(value))
 
 
 def _line_path(coords):
@@ -127,14 +131,14 @@ def _load_logo(logo_svg_path):
 
 
 def _select_gex_horizon(gex_data_dict):
-    """优先级: 0dte (Today) → weekly (Weekly) → all (All)
+    """优先级: 0dte（当日）→ weekly（近周）→ all（全部）
     返回 (gex_data, horizon_label)
     """
-    for key, label in [("0dte", "Today"), ("weekly", "Weekly"), ("all", "All")]:
+    for key, label in [("0dte", "当日"), ("weekly", "近周"), ("all", "全部")]:
         data = gex_data_dict.get(key, {})
         if data and len(data.get("strikes", [])) > 0:
             return data, label
-    return {}, "All"
+    return {}, "全部"
 
 
 # ─────────────────────────────────────────────
@@ -149,7 +153,7 @@ def build_scenario_svg(
     base_live_dir,
     base_1min_dir,
     logo_svg_path=None,
-    target_bars=120,
+    target_bars=150,
 ):
     """
     构建一张 KairAlert 场景分析 SVG 图表。
@@ -165,7 +169,7 @@ def build_scenario_svg(
     base_live_dir   : str   - live_data/{date} 目录，下含 {ticker}/history.json
     base_1min_dir   : str   - tipranks_1min/{date} 目录，下含 {ticker}.json
     logo_svg_path   : str   - KairAlert Logo.svg 的路径（可选，None 则不显示）
-    target_bars     : int   - K 线数量（默认 120）
+    target_bars     : int   - K 线数量（默认 150）
 
     Returns
     -------
@@ -334,12 +338,12 @@ def build_scenario_svg(
         '<rect width="100%" height="100%" fill="#f8fafc"/>',
         f'<rect x="20" y="15" width="{WIDTH-40}" height="{HEIGHT-30}" rx="12" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.5"/>',
         # Global title
-        _svg_text(40, 42, f"{ticker} Intraday Scenario: {scenario_title}", 18.5, 700, "#0f172a"),
-        _svg_text(40, 62, f"Time Window: {start_edt_str} - {end_edt_str} EDT ({target_bars} Candlesticks)", 12, 500, "#475569"),
+        _svg_text(40, 42, f"{ticker} 日内场景：{scenario_title}", 18.5, 700, "#0f172a"),
+        _svg_text(40, 62, f"时间区间：{start_edt_str} - {end_edt_str} 美东时间（{target_bars} 根K线）", 12, 500, "#475569"),
     ]
 
     # ── Panel 1: K 线面板 ────────────────────────────────────
-    kline_panel_title = f"{ticker} · {date_str[5:]} · 1-Min K-Line, VWAP & MA"
+    kline_panel_title = f"{ticker} · {date_str[5:]} · 1分钟K线、VWAP与均线"
     parts += [
         _svg_text(K_LEFT, K_TOP - 10, kline_panel_title, 12, 700, "#334155"),
         f'<rect x="{K_LEFT}" y="{K_TOP}" width="{K_RIGHT-K_LEFT}" height="{K_BOTTOM-K_TOP}" rx="8" fill="#f8fafc" stroke="#e2e8f0"/>',
@@ -362,6 +366,17 @@ def build_scenario_svg(
     vwap_coords, ma5_coords, ma15_coords, ma30_coords = [], [], [], []
     # ── 先插入网格线 ──
     parts += y_grid_parts
+
+    # ── 绘制成交量柱状图（底层淡化背景） ──
+    max_vol = mkt["volume"].max() if mkt["volume"].max() > 0 else 1.0
+    for i in range(N):
+        row = mkt.iloc[i]
+        cx  = x_for_idx(i)
+        vol_h = (float(row["volume"]) / max_vol) * 40.0
+        is_up = row["price"] >= row["open"]
+        vol_color = "#22c55e" if is_up else "#ef4444"
+        parts.append(f'<rect x="{cx - candle_width/2:.2f}" y="{K_BOTTOM - vol_h:.2f}" width="{candle_width:.2f}" height="{vol_h:.2f}" fill="{vol_color}" opacity="0.16"/>')
+
     for i in range(N):
         row = mkt.iloc[i]
         cx  = x_for_idx(i)
@@ -389,21 +404,7 @@ def build_scenario_svg(
         parts.append(f'<path d="{_line_path(ma5_coords)}" fill="none" stroke="#6366f1" stroke-width="1.1" opacity="0.85"/>')
     parts.append(f'<path d="{_line_path(vwap_coords)}" fill="none" stroke="#d97706" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>')
 
-    # ── 图例（左上角，紧贴面板内边缘）──────────────────────────
-    legend_items = [
-        ("VWAP", "#d97706", 1.6),
-        ("MA5",  "#6366f1", 1.1),
-        ("MA15", "#ec4899", 1.1),
-        ("MA30", "#f59e0b", 1.1),
-    ]
-    _lx = K_LEFT + 8
-    _ly = K_TOP + 14
-    for label, color, lw in legend_items:
-        parts += [
-            f'<line x1="{_lx}" y1="{_ly - 3:.1f}" x2="{_lx + 18}" y2="{_ly - 3:.1f}" stroke="{color}" stroke-width="{lw}" stroke-linecap="round"/>',
-            _svg_text(_lx + 22, _ly, label, 9, 500, color, "start"),
-        ]
-        _lx += 62
+
 
 
     # X 轴时间刻度（第一个和最后一个只显示文字，不画刻度线，避免超出圆角边框）
@@ -430,7 +431,7 @@ def build_scenario_svg(
     high_cx  = x_for_idx(high_idx)
     low_cx   = x_for_idx(low_idx)
     _hl_len  = 30   # 水平虫线长度
-    _hl_lw   = 44   # 标签文字宽度
+    _hl_lw   = 62   # 标签文字宽度
 
     # 最高价：今华向右延伸 30px，如到边界则向左
     if high_cx + _hl_len + _hl_lw <= K_RIGHT:
@@ -442,7 +443,7 @@ def build_scenario_svg(
     parts += [
         f'<line x1="{h_x1:.2f}" y1="{high_y:.2f}" x2="{h_x2:.2f}" y2="{high_y:.2f}" stroke="#16a34a" stroke-width="1" stroke-dasharray="3 2" opacity="0.7"/>',
         f'<rect x="{h_rect_x:.2f}" y="{high_y - 7:.2f}" width="{_hl_lw}" height="13" rx="2" fill="#f0fdf4" opacity="0.92"/>',
-        _svg_text(h_text_x, high_y + 3, f"H {high_val:.2f}", 9, 700, "#16a34a", h_anchor),
+        _svg_text(h_text_x, high_y + 3, f"高 {high_val:.2f}", 9, 700, "#16a34a", h_anchor),
     ]
     # 最低价：同上
     if low_cx + _hl_len + _hl_lw <= K_RIGHT:
@@ -454,40 +455,83 @@ def build_scenario_svg(
     parts += [
         f'<line x1="{l_x1:.2f}" y1="{low_y:.2f}" x2="{l_x2:.2f}" y2="{low_y:.2f}" stroke="#dc2626" stroke-width="1" stroke-dasharray="3 2" opacity="0.7"/>',
         f'<rect x="{l_rect_x:.2f}" y="{low_y - 7:.2f}" width="{_hl_lw}" height="13" rx="2" fill="#fff5f5" opacity="0.92"/>',
-        _svg_text(l_text_x, low_y + 3, f"L {low_val:.2f}", 9, 700, "#dc2626", l_anchor),
+        _svg_text(l_text_x, low_y + 3, f"低 {low_val:.2f}", 9, 700, "#dc2626", l_anchor),
     ]
 
-    # 事件标注：圆点 + 虚线 + 文字标签（限制在面板内）
-    _ev_box_w = 120
+    # ── 事件标注：固定到顶部/底部条带，长虚线引导，避免遮盖K线 ──────
+    #   TOP strip  中心 y = K_TOP  + 20 (第二行 K_TOP  + 48)
+    #   BOT strip  中心 y = K_BOTTOM - 58 (第二行 K_BOTTOM - 30)
+    #   成交量柱最高 40px → BOT strip 落在成交量柱上方
+    BOX_H     = 22
+    BOX_HALF  = BOX_H // 2
+    TOP_ROWS  = [K_TOP + 20,       K_TOP + 48      ]
+    BOT_ROWS  = [K_BOTTOM - 58,    K_BOTTOM - 86   ]
 
+    # 1. 收集所有事件信息
+    ev_items = []
     for ev in key_events:
         match = mkt[mkt["edt_time_str"] == ev["time"]]
         if match.empty:
             continue
-        idx    = match.index[0]
-        cx     = x_for_idx(idx)
-        row_ev = mkt.iloc[idx]
-        h_y    = y_for_price(row_ev["high"])
-        l_y    = y_for_price(row_ev["low"])
-        ev_color = ev.get("color", "#0284c7")
+        idx     = match.index[0]
+        cx      = x_for_idx(idx)
+        row_ev  = mkt.iloc[idx]
+        h_y     = y_for_price(row_ev["high"])
+        l_y     = y_for_price(row_ev["low"])
+        label   = ev["label"]
+        color   = ev.get("color", "#0284c7")
+        box_w   = max(88, _estimated_text_width(label) + 16)
+        # 空间：到顶部 strip 的净距 vs 到底部 strip 的净距
+        top_clearance = h_y - (TOP_ROWS[0] + BOX_HALF)   # 正数=蜡烛高点离top strip有距离
+        bot_clearance = (BOT_ROWS[0] - BOX_HALF) - l_y   # 正数=蜡烛低点离bot strip有距离
+        ev_items.append(dict(
+            cx=cx, h_y=h_y, l_y=l_y,
+            label=label, color=color, box_w=box_w,
+            prefer_bot=(bot_clearance >= top_clearance),  # 更宽裕的那侧
+        ))
 
-        space_above = h_y - K_TOP
-        space_below = K_BOTTOM - l_y
-        if space_below < 60 or space_above > space_below:
-            dot_y = h_y - 10
-            box_y = max(K_TOP + 20, dot_y - 28)
+    # 2. 分配 strip 行（优先让两个事件各占不同侧，减少视觉拥挤）
+    top_used = 0
+    bot_used = 0
+    for i, ep in enumerate(ev_items):
+        if ep["prefer_bot"] and bot_used < len(BOT_ROWS):
+            ep["label_y"] = BOT_ROWS[bot_used];  ep["side"] = "bot";  bot_used += 1
+        elif (not ep["prefer_bot"]) and top_used < len(TOP_ROWS):
+            ep["label_y"] = TOP_ROWS[top_used];  ep["side"] = "top";  top_used += 1
+        elif bot_used < len(BOT_ROWS):
+            ep["label_y"] = BOT_ROWS[bot_used];  ep["side"] = "bot";  bot_used += 1
         else:
-            dot_y = l_y + 10
-            box_y = min(K_BOTTOM - 20, dot_y + 28)
+            ep["label_y"] = TOP_ROWS[top_used];  ep["side"] = "top";  top_used += 1
 
-        box_cx     = max(K_LEFT + _ev_box_w // 2 + 2, min(K_RIGHT - _ev_box_w // 2 - 2, cx))
-        box_x      = box_cx - _ev_box_w // 2
-        line_y_end = box_y + 11 if dot_y < box_y else box_y - 11
+    # 3. 绘制
+    for ep in ev_items:
+        cx      = ep["cx"]
+        label_y = ep["label_y"]
+        color   = ep["color"]
+        box_w   = ep["box_w"]
+
+        # 标注框 x：居中于蜡烛，但不超出面板边界
+        box_cx = max(K_LEFT + box_w // 2 + 4, min(K_RIGHT - box_w // 2 - 4, cx))
+        box_x  = box_cx - box_w // 2
+
+        if ep["side"] == "top":
+            dot_y      = ep["h_y"] - 6          # 圆点贴近蜡烛上影线
+            line_y_end = label_y + BOX_HALF + 1  # 连接到标注框底边
+        else:
+            dot_y      = ep["l_y"] + 6           # 圆点贴近蜡烛下影线
+            line_y_end = label_y - BOX_HALF - 1  # 连接到标注框顶边
+
         parts += [
-            f'<circle cx="{cx:.2f}" cy="{dot_y:.2f}" r="3.8" fill="{ev_color}" stroke="#ffffff" stroke-width="1.5"/>',
-            f'<line x1="{cx:.2f}" y1="{dot_y:.2f}" x2="{cx:.2f}" y2="{line_y_end:.2f}" stroke="{ev_color}" stroke-width="1.2" stroke-dasharray="3 3"/>',
-            f'<rect x="{box_x:.2f}" y="{box_y - 11:.2f}" width="{_ev_box_w}" height="22" rx="4" fill="#ffffff" stroke="{ev_color}" stroke-width="1.2"/>',
-            _svg_text(box_cx, box_y + 4, ev["label"], 10, 700, ev_color, "middle"),
+            # 蜡烛处的圆点
+            f'<circle cx="{cx:.2f}" cy="{dot_y:.2f}" r="4" fill="{color}" stroke="#ffffff" stroke-width="1.5"/>',
+            # 从圆点到标注框边缘的斜向虚线
+            f'<line x1="{cx:.2f}" y1="{dot_y:.2f}" x2="{box_cx:.2f}" y2="{line_y_end:.2f}" '
+            f'stroke="{color}" stroke-width="1.3" stroke-dasharray="4 3" opacity="0.85"/>',
+            # 标注框（带轻微白色背景，遮住少量网格线）
+            f'<rect x="{box_x:.2f}" y="{label_y - BOX_HALF:.2f}" width="{box_w}" height="{BOX_H}" '
+            f'rx="5" fill="#ffffff" fill-opacity="0.96" stroke="{color}" stroke-width="1.4"/>',
+            # 标注文字
+            _svg_text(box_cx, label_y + 4, ep["label"], 10, 700, color, "middle"),
         ]
 
 
@@ -496,7 +540,7 @@ def build_scenario_svg(
         parts.append(f'<g transform="translate({K_RIGHT - 69:.2f}, {K_TOP + 8:.2f}) scale(0.073)" opacity="0.32">{logo_inner_svg}</g>')
 
     # ── Panel 2: KairAlert Gravity Map ───────────────────────
-    gravity_panel_title = f"KairAlert Gravity Map [{gex_horizon_label}]  ·  {event_snap_display} EDT"
+    gravity_panel_title = f"KairAlert 引力图 [{gex_horizon_label}]  ·  {event_snap_display} 美东时间"
 
     parts += [
         _svg_text(G_LEFT, G_TOP - 10, gravity_panel_title, 12, 700, "#334155"),
@@ -510,11 +554,11 @@ def build_scenario_svg(
     if logo_inner_svg:
         parts.append(f'<g transform="translate({G_RIGHT - 69:.2f}, {G_TOP + 8:.2f}) scale(0.073)" opacity="0.50">{logo_inner_svg}</g>')
 
-    # Spot 竖线（橙色）
+    # 现价竖线（橙色）
     sp_x = x_for_strike(snap_spot)
     parts += [
         f'<line x1="{sp_x:.2f}" y1="{G_TOP-4}" x2="{sp_x:.2f}" y2="{G_BOTTOM+5}" stroke="#ea580c" stroke-width="1.1" stroke-dasharray="3 3" opacity="0.75"/>',
-        _svg_text(sp_x + 3, G_TOP + 10, f"Spot {snap_spot:.2f}", 10.0, 800, "#ea580c", "start"),
+        _svg_text(sp_x + 3, G_TOP + 10, f"现价 {snap_spot:.2f}", 10.0, 800, "#ea580c", "start"),
     ]
 
     # VWAP 竖线（青绿色）
@@ -609,7 +653,7 @@ def render_and_save(
     base_1min_dir,
     output_paths,
     logo_svg_path=None,
-    target_bars=120,
+    target_bars=150,
 ):
     """
     构建 SVG 并保存到一个或多个路径。
@@ -637,7 +681,7 @@ def render_and_save(
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             f.write(svg_str)
-        print(f"[gravity_chart] Saved → {path}")
+        print(f"[gravity_chart] 已保存 → {path}")
     return svg_str
 
 
@@ -654,45 +698,81 @@ if __name__ == "__main__":
     OUT_DIR_ART  = "/home/zdying/.gemini/antigravity-cli/brain/8eece4a9-04b0-4e3c-b24d-b5d2930f7318"
 
     SCENARIOS = [
+        # ── AMD ────────────────────────────────────────────────────────────
+        # 图1：09:49 信号确认；09:44 触顶只作为正文前因，不做图上主标注
         {
             "ticker": "AMD",
-            "title":  "Gravity Ceiling Magnet Surge & Breakout Reversal",
-            "anchor": "09:35",
+            "title":  "$520 引力压力确认：跌破 VWAP",
+            "anchor": "09:49",
             "events": [
-                {"time": "09:35", "label": "09:35 Cross VWAP",              "color": "#d97706"},
-                {"time": "09:45", "label": "09:45 Hit Gravity Ceiling $520", "color": "#dc2626"},
+                {"time": "09:49", "label": "09:49 跌破 VWAP，均线死叉",             "color": "#7c3aed"},
             ],
-            "filename": "scenario_amd_0720.svg",
+            "filename": "scenario_amd_0720_signal1.svg",
         },
+        # 图2：10:40 二次确认；10:35 反弹高点只作为正文前因
+        {
+            "ticker": "AMD",
+            "title":  "引力结构保持，第二次死叉确认",
+            "anchor": "10:40",
+            "events": [
+                {"time": "10:40", "label": "10:40 VWAP 下方第二次死叉",             "color": "#7c3aed"},
+            ],
+            "filename": "scenario_amd_0720_signal2.svg",
+        },
+        # ── AAPL ───────────────────────────────────────────────────────────
+        # 图1：开盘跌破 VWAP → 贴近 $325 引力区
         {
             "ticker": "AAPL",
-            "title":  "VWAP Breakdown & Gravity Floor Absorption",
-            "anchor": "09:40",
+            "title":  "跌破 VWAP 后向下方引力区运行",
+            "anchor": "09:31",
             "events": [
-                {"time": "09:40", "label": "09:40 Break VWAP",                "color": "#dc2626"},
-                {"time": "10:30", "label": "10:30 Approach Gravity Floor $325", "color": "#16a34a"},
+                {"time": "09:31", "label": "09:31 首次跌破 VWAP",                   "color": "#dc2626"},
+                {"time": "09:34", "label": "09:34 确认处于 VWAP 下方",              "color": "#7c3aed"},
             ],
-            "filename": "scenario_aapl_0720.svg",
+            "filename": "scenario_aapl_0720_signal1.svg",
         },
+        # 图2：12:41 击穿确认；10:26 支撑测试在同一窗口里作为走势背景
+        {
+            "ticker": "AAPL",
+            "title":  "$325 引力支撑区被跌破",
+            "anchor": "11:06",
+            "events": [
+                {"time": "12:41", "label": "12:41 跌破 $325",                       "color": "#dc2626"},
+            ],
+            "filename": "scenario_aapl_0720_signal2.svg",
+        },
+        # ── SPY ────────────────────────────────────────────────────────────
+        # 图：引力锁定 + 跌破 VWAP + 死叉（补充 09:48 死叉标注）
         {
             "ticker": "SPY",
-            "title":  "Gravity Lock Zone Pinning & VWAP Breakdown",
-            "anchor": "09:30",
+            "title":  "脱离引力锁定区并跌破 VWAP",
+            "anchor": "09:46",
             "events": [
-                {"time": "09:30", "label": "09:30 Gravity Lock $747",  "color": "#8b5cf6"},
-                {"time": "10:00", "label": "10:00 Break VWAP",        "color": "#dc2626"},
+                {"time": "09:46", "label": "09:46 跌破 VWAP",                       "color": "#dc2626"},
+                {"time": "09:48", "label": "09:48 均线死叉确认",                    "color": "#7c3aed"},
             ],
             "filename": "scenario_spy_0720.svg",
         },
+        # ── INTC ───────────────────────────────────────────────────────────
+        # 图1：09:52 信号确认；09:37/09:50 触顶过程只作为正文前因
         {
             "ticker": "INTC",
-            "title":  "Gravity Ceiling $100 Precision Cap & Reversal",
-            "anchor": "09:35",
+            "title":  "$100 引力压力确认：跌破 VWAP",
+            "anchor": "09:52",
             "events": [
-                {"time": "09:35", "label": "09:35 Cross VWAP",               "color": "#d97706"},
-                {"time": "09:50", "label": "09:50 Hit Gravity Ceiling $100",  "color": "#dc2626"},
+                {"time": "09:52", "label": "09:52 跌破 VWAP，均线死叉",             "color": "#7c3aed"},
             ],
-            "filename": "scenario_intc_0720.svg",
+            "filename": "scenario_intc_0720_signal1.svg",
+        },
+        # 图2：10:36 二次确认；10:29 反弹只作为正文前因
+        {
+            "ticker": "INTC",
+            "title":  "引力结构保持，VWAP 下方第二次死叉",
+            "anchor": "10:36",
+            "events": [
+                {"time": "10:36", "label": "10:36 VWAP 下方第二次死叉",             "color": "#7c3aed"},
+            ],
+            "filename": "scenario_intc_0720_signal2.svg",
         },
     ]
 
@@ -712,4 +792,4 @@ if __name__ == "__main__":
             ],
         )
 
-    print("\nAll scenario SVGs rendered successfully.")
+    print("\n全部场景图已生成。")
